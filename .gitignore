@@ -1,0 +1,8 @@
+main
+.env
+*.db
+debug/
+.vscode/
+debug.test
+debug
+vendor

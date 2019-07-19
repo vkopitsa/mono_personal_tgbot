@@ -1,0 +1,17 @@
+version: '2'
+services:
+  app:
+    container_name: "${PREFIX_CONTAINER}app"
+    hostname:       "${PREFIX_CONTAINER}app"
+    restart: always
+    env_file: .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - MONO_TOKEN=${MONO_TOKEN}
+      - TELEGRAM_ADMINS=${TELEGRAM_ADMINS}
+      - TELEGRAM_CHATS=${TELEGRAM_CHATS}
+    ports:
+      - ${APP_PORT}:8080
