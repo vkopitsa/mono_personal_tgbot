@@ -1,0 +1,10 @@
+main
+.env
+*.db
+debug/
+.vscode/
+debug.test
+debug
+vendor
+.DS_Store
+release/
