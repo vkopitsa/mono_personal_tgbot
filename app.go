@@ -5,7 +5,7 @@ import (
 )
 
 func main() {
-	bot := NewBot(
+	bot := New(
 		os.Getenv("TELEGRAM_TOKEN"),
 		os.Getenv("TELEGRAM_ADMINS"),
 		os.Getenv("TELEGRAM_CHATS"),

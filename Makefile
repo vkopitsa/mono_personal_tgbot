@@ -4,10 +4,13 @@ GOARCH=amd64
 # Setup the -ldflags option for go build here, interpolate the variable values
 LDFLAGS = -ldflags "-s -w"
 
+dev: ## run on local machine
+	$(shell cat .env | sed -e /^#/d | xargs) go run .
+
 test: ## test
 	go test ./...
 
-build: linux darwin windows ## Build
+release: linux darwin windows ## Build a release
 
 linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build ${LDFLAGS} -o ./release/${RELNAME}-linux-${GOARCH} *.go

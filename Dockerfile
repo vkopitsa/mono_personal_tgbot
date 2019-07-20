@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /app .
 
 # runner
 FROM alpine:latest  
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /
 COPY --from=builder /app .
