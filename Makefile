@@ -5,7 +5,7 @@ GOARCH=amd64
 LDFLAGS = -ldflags "-s -w"
 
 dev: ## run on local machine
-	$(shell cat .env | sed -e /^#/d | xargs) go run *.go
+	$(shell cat .env | sed -e /^#/d | xargs) go run .
 
 test: ## test
 	go test ./...

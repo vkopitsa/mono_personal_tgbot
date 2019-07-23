@@ -6,6 +6,8 @@
 A simple telegram bot, written in Go with the [telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api 'telegram-bot-api') library.
 
 ![mono_personal_tgbot](Resources/screenshot.png)
+![mono_personal_tgbot](Resources/screenshot1.png)
+![mono_personal_tgbot](Resources/screenshot2.png)
 
 ## Usage
 
@@ -24,6 +26,7 @@ Run `mono_personal_tgbot` execution file in your terminal with following env var
  Command                 | Description
 ------------------------ | -----------------------------------------------------------
 `/balance`               | Get `UAH` balance of your account 
+`/report`                | Get a report for the period
 
 ## Usage with docker-compose
 

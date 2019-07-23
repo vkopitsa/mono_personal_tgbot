@@ -31,7 +31,7 @@ type StatementItem struct {
 	ID              string `json:"id"`
 	Time            int    `json:"time"`
 	Description     string `json:"description"`
-	Comment         string `json:"comment"`
+	Comment         string `json:"comment,omitempty"`
 	Mcc             int    `json:"mcc"`
 	Amount          int    `json:"amount"`
 	OperationAmount int    `json:"operationAmount"`
@@ -81,6 +81,8 @@ type bot struct {
 
 	statementTmpl *template.Template
 	balanceTmpl   *template.Template
+
+	report Report
 }
 
 // New returns a bot object.
@@ -107,6 +109,8 @@ func New(telegramToken, telegramAdmins, telegramChats, monoToken string) Bot {
 
 		statementTmpl: statementTmpl,
 		balanceTmpl:   balanceTmpl,
+
+		report: NewReport(),
 	}
 
 	return &b
@@ -131,21 +135,34 @@ func (b *bot) TelegramStart() {
 	updates, err := b.BotAPI.GetUpdatesChan(u)
 
 	for update := range updates {
-		if update.Message == nil || !(b.isAdmin(update.Message.From.ID) || b.isChat(update.Message.Chat.ID)) {
-			continue
+
+		log.Printf("[telegram] dfsdf")
+
+		// var fromID int
+		// var chatID int64
+		// if update.Message != nil {
+		// 	fromID = update.Message.From.ID
+		// 	chatID = update.Message.Chat.ID
+		// }
+
+		// if !(b.isAdmin(update.Message.From.ID) || b.isChat(update.Message.Chat.ID)) {
+		// 	continue
+		// }
+
+		if update.Message != nil {
+			log.Printf("[telegram] received a message from %d in chat %d",
+				update.Message.From.ID, update.Message.Chat.ID)
 		}
 
-		log.Printf("[telegram] received a message from %d in chat %d",
-			update.Message.From.ID,
-			update.Message.Chat.ID)
-
-		if update.Message.Text == "/balance" {
+		if update.Message != nil && update.Message.Text == "/balance" {
 			if b.monoLimiter.Allow() {
 				log.Printf("[monoapi] Fetching...")
 				b.clientInfo, err = b.getClientInfo()
 				if err != nil {
 					continue
 				}
+			} else {
+				log.Printf("[telegram] balance, waiting 1 minute")
 			}
 
 			var account Account
@@ -158,7 +175,7 @@ func (b *bot) TelegramStart() {
 			var tpl bytes.Buffer
 			err := b.balanceTmpl.Execute(&tpl, account)
 			if err != nil {
-				log.Printf("[monoapi] template execute error %s", err)
+				log.Printf("[telegram] balance, template execute error %s", err)
 				continue
 			}
 			message := tpl.String()
@@ -166,7 +183,88 @@ func (b *bot) TelegramStart() {
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, message)
 			msg.ReplyToMessageID = update.Message.MessageID
 
-			b.BotAPI.Send(msg)
+			_, err = b.BotAPI.Send(msg)
+			if err != nil {
+				log.Printf("[telegram] balance, send msg error %s", err)
+			}
+		} else if update.Message != nil && update.Message.Text == "/report" {
+			log.Printf("[telegram] report show keyboard")
+
+			_, err := b.BotAPI.Send(b.report.GetKeyboardMessageConfig(update))
+			if err != nil {
+				log.Printf("[telegram] report send msg error %s", err)
+			}
+		} else if update.Message != nil && b.report.IsReportGridCommand(update) {
+			log.Printf("[telegram] report grid")
+
+			if !b.monoLimiter.Allow() {
+				log.Printf("[telegram] report grid, waiting 1 minute")
+
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please waiting 1 minute and then try again.")
+				_, err = b.BotAPI.Send(msg)
+
+				continue
+			}
+
+			items, err := b.getStatements(b.report.GetPeriodFromUpdate(update))
+			if err != nil {
+				log.Printf("[telegram] report get statements error %s", err)
+				continue
+			}
+
+			// init statements data
+			b.report.SetGridData(update, items)
+
+			_, err = b.BotAPI.Send(b.report.GetReportGrid(update))
+			if err != nil {
+				log.Printf("[telegram] report grid send error %s", err)
+			}
+		} else if update.CallbackQuery != nil && b.report.IsReportGridPageCommand(update) {
+			log.Printf("[telegram] report grid page")
+
+			if !b.report.IsExistGridData(update) {
+
+				if !b.monoLimiter.Allow() {
+					log.Printf("[telegram] report grid page, waiting 1 minute")
+
+					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Please waiting 1 minute and then try again.")
+					_, err = b.BotAPI.Send(msg)
+
+					continue
+				}
+
+				items, err := b.getStatements(b.report.GetPeriodFromUpdate(update))
+				if err != nil {
+					log.Printf("[telegram] report grid page get statements error %s", err)
+					continue
+				}
+
+				// reinit statements data if does not exist
+				b.report.SetGridData(update, items)
+			}
+
+			editMessage, err := b.report.GetUpdatedReportGrid(update)
+			if err != nil {
+				_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
+					CallbackQueryID: update.CallbackQuery.ID,
+					Text:            "Error :(",
+				})
+				if err != nil {
+					log.Printf("[telegram] report grid send callback answer on update error %s", err)
+				}
+			}
+
+			_, err = b.BotAPI.Send(editMessage)
+			if err != nil {
+				log.Printf("[telegram] report grid send error %s", err)
+			}
+
+			_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
+				CallbackQueryID: update.CallbackQuery.ID,
+			})
+			if err != nil {
+				log.Printf("[telegram] report grid send callback answer error %s", err)
+			}
 		}
 	}
 }
@@ -177,17 +275,17 @@ func (b *bot) WebhookStart() {
 	http.HandleFunc("/web_hook", func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("[monoapi webhook] error %s", err)
+			log.Printf("[webhook] error %s", err)
 
 			fmt.Fprintf(w, "Not Ok!")
 			return
 		}
 
-		//log.Printf("[monoapi webhook] body %s", string(body))
+		//log.Printf("[webhook] body %s", string(body))
 
 		var statementItemData StatementItemData
 		if err := json.Unmarshal(body, &statementItemData); err != nil {
-			log.Printf("[monoapi webhook] unmarshal error %s", err)
+			log.Printf("[webhook] unmarshal error %s", err)
 
 			fmt.Fprintf(w, "Not Ok!")
 			return
@@ -260,7 +358,7 @@ func (b bot) SetWebHook(url string) ([]byte, error) {
 
 	req, err := http.NewRequest("POST", "https://api.monobank.ua/personal/webhook", payload)
 	if err != nil {
-		log.Printf("[set webHook] NewRequest %s", err)
+		log.Printf("[monoapi] webhook, NewRequest %s", err)
 		return []byte{}, err
 	}
 
@@ -269,19 +367,77 @@ func (b bot) SetWebHook(url string) ([]byte, error) {
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("[set webHook] error %s", err)
+		log.Printf("[monoapi] webhook, error %s", err)
 		return []byte{}, err
 	}
 
 	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		log.Printf("[set webHook] error %s", err)
+		log.Printf("[monoapi] webhook, error %s", err)
 		return []byte{}, err
 	}
 
-	log.Printf("[set webHook] responce %s", string(body))
+	log.Printf("[monoapi] webhook, responce %s", string(body))
 	return body, err
+}
+
+func (b bot) getStatements(command string) ([]StatementItem, error) {
+
+	statementItems := []StatementItem{}
+
+	from, to, err := getTimeRangeByPeriod(command)
+	if err != nil {
+		log.Printf("[monoapi] statements, range error %s", err)
+		return statementItems, err
+	}
+
+	log.Printf("[monoapi] statements, range from: %d, to: %d", from, to)
+
+	// // TODO: remove
+	// if err := json.Unmarshal([]byte(`[{"id":"CM9hyuylV9TaiBo","time":1563895099,"description":"АТБ","mcc":5411,"amount":-20980,"operationAmount":-20980,"currencyCode":980,"commissionRate":0,"cashbackAmount":419,"balance":219174,"hold":true},{"id":"tg84J_KO_tXzl2c","time":1563889412,"description":"Мой приват гр","mcc":4829,"amount":-30000,"operationAmount":-30000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":240154,"hold":true},{"id":"C82CIdXtnwfrsiI","time":1563889335,"description":"От: ФОП КОПИЦЯ ВОЛОДИМИР ВІКТОРОВИЧ","mcc":4829,"amount":270000,"operationAmount":270000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":270154,"hold":true},{"id":"8bT7TXUj1K-8yyc","time":1563733691,"description":"Банкомат DN00 Illinska  str., b","mcc":6011,"amount":-20100,"operationAmount":-20100,"currencyCode":980,"commissionRate":100,"cashbackAmount":0,"balance":154,"hold":true},{"id":"1uWDxailk_BbakI","time":1563733639,"description":"От: Світлана Копиця","mcc":4829,"amount":200,"operationAmount":200,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":20254,"hold":true},{"id":"RFTBYbhGR_ll_QM","time":1563733616,"description":"От: Світлана Копиця","mcc":4829,"amount":900,"operationAmount":900,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":20054,"hold":true},{"id":"rDaBsvQAlWNm--Y","time":1563733534,"description":"Банкомат DN00 Illinska  str., b","mcc":6011,"amount":-20100,"operationAmount":-20100,"currencyCode":980,"commissionRate":100,"cashbackAmount":0,"balance":19154,"hold":true},{"id":"-OCUS9Dj8MLh2KQ","time":1563730703,"description":"Світлана Копиця","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":39254,"hold":true},{"id":"RK_lBt3GO8qN4xc","time":1563694816,"description":"От: Світлана Копиця","comment":"Возврат","mcc":4829,"amount":100,"operationAmount":100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":39354,"hold":true},{"id":"61GekshIIBmguG4","time":1563694411,"description":"Світлана Копиця","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":39254,"hold":true},{"id":"K-BX2nrSs-fdjjU","time":1563692281,"description":"АТБ","mcc":5411,"amount":-19730,"operationAmount":-19730,"currencyCode":980,"commissionRate":0,"cashbackAmount":394,"balance":39354,"hold":false},{"id":"ioorhXdsSJ_Ul3M","time":1563623368,"description":"McDonalds","mcc":5814,"amount":-26600,"operationAmount":-26600,"currencyCode":980,"commissionRate":0,"cashbackAmount":798,"balance":59084,"hold":true},{"id":"4Vg01vtZCeicFwk","time":1563563811,"description":"От: Світлана Копиця","comment":"На тобі, жлоб","mcc":4829,"amount":100,"operationAmount":100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":85684,"hold":true},{"id":"HT_5XEK6-oMa9PU","time":1563563742,"description":"Світлана Копиця","comment":"I'm waiting for my money 💵","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":85584,"hold":true},{"id":"xG3TspFBKLsSfJc","time":1563563220,"description":"Світлана Копиця","comment":"Please back the amount with anything comment","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":85684,"hold":true},{"id":"4z7j-aU-EOLqaQY","time":1563561107,"description":"От: Світлана Копиця","comment":"Піздюку коханому :)","mcc":4829,"amount":100,"operationAmount":100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":85784,"hold":true},{"id":"cvj2VNJtLgdtQfU","time":1563558640,"description":"VCODE*452902","mcc":8999,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":85684,"hold":true},{"id":"nT-MM1EXibakbkw","time":1563554488,"description":"Сільпо","mcc":5411,"amount":-21554,"operationAmount":-21554,"currencyCode":980,"commissionRate":0,"cashbackAmount":431,"balance":85784,"hold":false},{"id":"b7MR5PBCpivtWNQ","time":1563554181,"description":"FOP REZNIK P-59 K-1","mcc":5499,"amount":-6070,"operationAmount":-6070,"currencyCode":980,"commissionRate":0,"cashbackAmount":121,"balance":107338,"hold":false},{"id":"iku7NezLVthiA1s","time":1563553353,"description":"HOUSE SUMY","mcc":5651,"amount":-9900,"operationAmount":-9900,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":113408,"hold":false},{"id":"pOIrC1VAA2068r4","time":1563552016,"description":"S.UA.03.62","mcc":5655,"amount":-14500,"operationAmount":-14500,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":123308,"hold":false},{"id":"DZJeyPCNFD4ZNQQ","time":1563541480,"description":"От: Світлана Копиця","mcc":4829,"amount":100,"operationAmount":100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":137808,"hold":true},{"id":"uxHwgouS3Vb43DU","time":1563541415,"description":"Светулька","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":137708,"hold":true},{"id":"hGMkk1jdpmyW9eA","time":1563540895,"description":"Светулька","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":137808,"hold":true},{"id":"ekigN0tNJeQ5QtE","time":1563540573,"description":"Светулька","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":137908,"hold":true},{"id":"e1SKgXyxlsvDLYY","time":1563518600,"description":"FOP REZNIK P-59 K-2","mcc":5499,"amount":-2550,"operationAmount":-2550,"currencyCode":980,"commissionRate":0,"cashbackAmount":51,"balance":138008,"hold":false},{"id":"tHCyaxSVvSzbyCw","time":1563469747,"description":"iHerb","mcc":5499,"amount":-169706,"operationAmount":-169706,"currencyCode":980,"commissionRate":0,"cashbackAmount":3394,"balance":140558,"hold":false},{"id":"KeGctBeJeiTxujg","time":1563467850,"description":"Банкомат DN00 Stepana Bandery","mcc":6011,"amount":-100500,"operationAmount":-100500,"currencyCode":980,"commissionRate":500,"cashbackAmount":0,"balance":310264,"hold":false},{"id":"D1IWZ2CdMirVeTg","time":1563462870,"description":"516875****7373","mcc":4829,"amount":-1000,"operationAmount":-1000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":410764,"hold":true},{"id":"anu3P3fb82OhIvI","time":1563458881,"description":"Мама","mcc":4829,"amount":-100000,"operationAmount":-100000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":411764,"hold":true},{"id":"cjT5nvGt2fNNcmU","time":1563458069,"description":"От: ФОП КОПИЦЯ ВОЛОДИМИР ВІКТОРОВИЧ","mcc":4829,"amount":500000,"operationAmount":500000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":511764,"hold":true},{"id":"xlyUOJ2UEHfhDBY","time":1563455562,"description":"516930****3367","mcc":4829,"amount":-1000,"operationAmount":-1000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":11764,"hold":true},{"id":"1HSv8YG07Z8jldI","time":1563455060,"description":"От: ФОП КОПИЦЯ ВОЛОДИМИР ВІКТОРОВИЧ","mcc":4829,"amount":10000,"operationAmount":10000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":12764,"hold":true},{"id":"iOldn69c7vhUZ7w","time":1563450095,"description":"Максим Рева","mcc":4829,"amount":-4000,"operationAmount":-4000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":2764,"hold":true},{"id":"LttPvObRqxwuswU","time":1563267413,"description":"Vodafone\n+380668337598","mcc":4814,"amount":-10000,"operationAmount":-10000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":6764,"hold":true},{"id":"BujAa9viDjaI5QQ","time":1563267348,"description":"От: Мой укрсиб","mcc":4829,"amount":10000,"operationAmount":10000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":16764,"hold":true},{"id":"xyvlVJpLi57bFmc","time":1563263508,"description":"WWW.HETZNER.DE","mcc":7399,"amount":-14364,"operationAmount":-490,"currencyCode":978,"commissionRate":0,"cashbackAmount":0,"balance":6764,"hold":false},{"id":"bqEj_1g0o6hOlxU","time":1563198834,"description":"От: Сергій Харченко","mcc":4829,"amount":100,"operationAmount":100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":21128,"hold":true},{"id":"0zDFdOJLTwd7ZSQ","time":1563198781,"description":"Сергій Харченко","comment":"Test webhook","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":21028,"hold":true},{"id":"M5dqXdqPjm6UrFQ","time":1563186155,"description":"От: Сергій Харченко","comment":"Test WH","mcc":4829,"amount":100,"operationAmount":100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":21128,"hold":true},{"id":"buCK3jm4nRFZKJo","time":1563186106,"description":"Сергій Харченко","comment":"Test webhook","mcc":4829,"amount":-100,"operationAmount":-100,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":21028,"hold":true},{"id":"RIjWoR_G0DmdjQ0","time":1563162373,"description":"От: Мой укрсиб","mcc":4829,"amount":20000,"operationAmount":20000,"currencyCode":980,"commissionRate":0,"cashbackAmount":0,"balance":21128,"hold":true}]`), &statementItems); err != nil {
+	// 	log.Printf("[monoapi] statements, unmarshal error %s", err)
+	// 	return statementItems, err
+	// }
+	// //log.Printf("[monoapi] statements, array %s", statementItems)
+	// return statementItems, nil
+	// // TODO: remove
+
+	url := fmt.Sprintf("https://api.monobank.ua/personal/statement/0/%d", from)
+	if to > 0 {
+		url = fmt.Sprintf("%s/%d", url, to)
+	}
+	//url := fmt.Sprintf("https://api.monobank.ua/personal/statement/0/1561939200")
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("[monoapi] statements, NewRequest error %s", err)
+		return statementItems, err
+	}
+
+	req.Header.Add("x-token", b.monoToken)
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[monoapi] statements, error %s", err)
+		return statementItems, err
+	}
+
+	defer res.Body.Close()
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[monoapi] statements, error %s", err)
+		return statementItems, err
+	}
+
+	log.Printf("[monoapi] statements, body %s", string(body))
+
+	if err := json.Unmarshal(body, &statementItems); err != nil {
+		log.Printf("[monoapi] statements, unmarshal error %s", err)
+		return statementItems, err
+	}
+
+	return statementItems, nil
 }
 
 func (b bot) getClientInfo() (ClientInfo, error) {
@@ -290,7 +446,7 @@ func (b bot) getClientInfo() (ClientInfo, error) {
 	url := "https://api.monobank.ua/personal/client-info"
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Printf("[monoapi] create request error %s", err)
+		log.Printf("[monoapi] client info, create request error %s", err)
 		return clientInfo, err
 	}
 
@@ -298,7 +454,7 @@ func (b bot) getClientInfo() (ClientInfo, error) {
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("[monoapi] request error %s", err)
+		log.Printf("[monoapi] client info, request error %s", err)
 		return clientInfo, err
 	}
 
@@ -309,7 +465,7 @@ func (b bot) getClientInfo() (ClientInfo, error) {
 	}
 
 	if err := json.Unmarshal(body, &clientInfo); err != nil {
-		log.Printf("[monoapi] unmarshal error %s", err)
+		log.Printf("[monoapi] client info, unmarshal error %s", err)
 		return clientInfo, err
 	}
 
