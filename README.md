@@ -5,8 +5,13 @@
 
 A simple telegram bot, written in Go with the [telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api 'telegram-bot-api') library.
 
+### Report
 ![mono_personal_tgbot](Resources/screenshot0.png)
+
+### WebHook
 ![mono_personal_tgbot](Resources/screenshot1.png)
+
+### Balance
 ![mono_personal_tgbot](Resources/screenshot2.png)
 
 ## Usage
