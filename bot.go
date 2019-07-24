@@ -136,7 +136,29 @@ func (b *bot) TelegramStart() {
 
 	for update := range updates {
 
-		log.Printf("[telegram] dfsdf")
+		var fromID int
+		var chatID int64
+		if update.Message != nil {
+			fromID = update.Message.From.ID
+			chatID = update.Message.Chat.ID
+		} else {
+			fromID = update.CallbackQuery.Message.ReplyToMessage.From.ID
+			chatID = update.CallbackQuery.Message.ReplyToMessage.Chat.ID
+		}
+
+		if !(b.isAdmin(fromID) || b.isChat(chatID)) {
+			if update.CallbackQuery != nil {
+				_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
+					CallbackQueryID: update.CallbackQuery.ID,
+					Text:            "Access denied",
+				})
+				if err != nil {
+					log.Printf("[telegram] access denied, callback answer error %s", err)
+				}
+			}
+
+			continue
+		}
 
 		if update.Message != nil {
 			log.Printf("[telegram] received a message from %d in chat %d",
