@@ -40,11 +40,11 @@ Rename `.env.dev` file to `.env` and edit.
     # docker-compose up -d
 
 ## Download
-[v0.1 release, Linux](https://github.com/vkopitsa/mono_personal_tgbot/releases/download/v0.1/mono_personal_tgbot-linux-amd64)
+[v0.2 release, Linux](https://github.com/vkopitsa/mono_personal_tgbot/releases/download/v0.2/mono_personal_tgbot-linux-amd64)
 
-[v0.1 release, MacOS](https://github.com/vkopitsa/mono_personal_tgbot/releases/download/v0.1/mono_personal_tgbot-darwin-amd64)
+[v0.2 release, MacOS](https://github.com/vkopitsa/mono_personal_tgbot/releases/download/v0.2/mono_personal_tgbot-darwin-amd64)
 
-[v0.1 release, Windows](https://github.com/vkopitsa/mono_personal_tgbot/releases/download/v0.1/mono_personal_tgbot-windows-amd64.exe)
+[v0.2 release, Windows](https://github.com/vkopitsa/mono_personal_tgbot/releases/download/v0.2/mono_personal_tgbot-windows-amd64.exe)
 
 ## Compatibility
 The bot is only available for Windows, Linux, MacOS.
