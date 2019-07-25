@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -188,4 +189,47 @@ func firstDayOfISOWeek(year int, week int, timezone *time.Location) time.Time {
 		isoYear, isoWeek = date.ISOWeek()
 	}
 	return date
+}
+
+type pageData struct {
+	Page     int
+	FromID   int
+	ChatID   int64
+	Period   string
+	ClientID uint32
+}
+
+func callbackQueryDataParser(data string) pageData {
+	// prefix + Period + FromID + ChatID + clientID + page
+	// example: r:1:12321324:312234234:23423432:1
+	arr := strings.Split(data, ":")
+
+	// not checking errors because it always will be correct numbers
+	period := arr[1]
+	fromID, _ := strconv.Atoi(arr[2])
+	chatID, _ := strconv.ParseInt(arr[3], 10, 64)
+	clientID, _ := strconv.ParseUint(arr[4], 10, 32)
+	page, _ := strconv.Atoi(arr[5])
+
+	return pageData{
+		Page:     page,
+		Period:   period,
+		FromID:   fromID,
+		ChatID:   chatID,
+		ClientID: uint32(clientID),
+	}
+}
+
+func callbackQueryDataBulder(prefix string, data pageData) string {
+	// prefix + Period + FromID + ChatID + clientID + page
+	// example: r:1:12321324:312234234:23423432:1
+
+	return fmt.Sprintf("%s%s:%d:%d:%d:",
+		prefix,
+		data.Period,
+		data.FromID,
+		data.ChatID,
+		data.ClientID,
+		//data.Page,
+	)
 }

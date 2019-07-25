@@ -9,14 +9,8 @@ func main() {
 		os.Getenv("TELEGRAM_TOKEN"),
 		os.Getenv("TELEGRAM_ADMINS"),
 		os.Getenv("TELEGRAM_CHATS"),
-		os.Getenv("MONO_TOKEN"),
+		os.Getenv("MONO_TOKENS"),
 	)
-
-	webHook := os.Getenv("SET_WEBHOOK")
-	if webHook != "" {
-		bot.SetWebHook(webHook)
-		return
-	}
 
 	go bot.TelegramStart()
 	go bot.ProcessingStart()
