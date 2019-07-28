@@ -15,12 +15,19 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// WebHookResponse is a response from api on setup webhook
+type WebHookResponse struct {
+	ErrorDescription string `json:"errorDescription"`
+	Status           string `json:"status"`
+}
+
 // Client is the interface representing client object.
 type Client interface {
 	GetID() uint32
 	GetReport() Report
 	GetInfo() (ClientInfo, error)
 	GetStatement(command string) ([]StatementItem, error)
+	SetWebHook(url string) (WebHookResponse, error)
 
 	IsState(flag ClientState) bool
 	Can(flag ClientState) bool
@@ -97,13 +104,15 @@ func (c *client) GetInfo() (ClientInfo, error) {
 }
 
 // SetWebHook is a function set up the monobank webhook.
-func (c client) SetWebHook(url string) ([]byte, error) {
+func (c client) SetWebHook(url string) (WebHookResponse, error) {
+	response := WebHookResponse{}
+
 	payload := strings.NewReader(fmt.Sprintf("{\"webHookUrl\": \"%s\"}", url))
 
 	req, err := http.NewRequest("POST", "https://api.monobank.ua/personal/webhook", payload)
 	if err != nil {
 		log.Printf("[monoapi] webhook, NewRequest %s", err)
-		return []byte{}, err
+		return response, err
 	}
 
 	req.Header.Add("X-Token", c.token)
@@ -112,18 +121,23 @@ func (c client) SetWebHook(url string) ([]byte, error) {
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("[monoapi] webhook, error %s", err)
-		return []byte{}, err
+		return response, err
 	}
 
 	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[monoapi] webhook, error %s", err)
-		return []byte{}, err
+		return response, err
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		log.Printf("[monoapi] webhook, unmarshal error %s", err)
+		return response, err
 	}
 
 	log.Printf("[monoapi] webhook, responce %s", string(body))
-	return body, err
+	return response, err
 }
 
 func (c client) GetStatement(command string) ([]StatementItem, error) {

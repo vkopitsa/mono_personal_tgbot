@@ -77,6 +77,7 @@ type bot struct {
 
 	statementTmpl *template.Template
 	balanceTmpl   *template.Template
+	webhookTmpl   *template.Template
 }
 
 // New returns a bot object.
@@ -88,6 +89,11 @@ func New(telegramToken, telegramAdmins, telegramChats, monoTokens string) Bot {
 	}
 
 	balanceTmpl, err := GetTempate(balanceTemplate)
+	if err != nil {
+		log.Fatalf("[template] %s", err)
+	}
+
+	webhookTmpl, err := GetTempate(webhookTemplate)
 	if err != nil {
 		log.Fatalf("[template] %s", err)
 	}
@@ -110,6 +116,7 @@ func New(telegramToken, telegramAdmins, telegramChats, monoTokens string) Bot {
 
 		statementTmpl: statementTmpl,
 		balanceTmpl:   balanceTmpl,
+		webhookTmpl:   webhookTmpl,
 	}
 
 	return &b
@@ -166,7 +173,7 @@ func (b *bot) TelegramStart() {
 
 		if update.Message != nil && strings.HasPrefix(update.Message.Text, "/balance") {
 
-			r1 := strings.Split(update.Message.Text, "_")
+			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/balance"), "_")
 			idx := 0
 			if len(r1) == 1 {
 				idx = 0
@@ -213,7 +220,7 @@ func (b *bot) TelegramStart() {
 		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/report") {
 			log.Printf("[telegram] report show keyboard")
 
-			r1 := strings.Split(update.Message.Text, "_")
+			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/report"), "_")
 			idx := 0
 			if len(r1) == 1 {
 				idx = 0
@@ -239,6 +246,95 @@ func (b *bot) TelegramStart() {
 
 			// set state of the client
 			client.SetState(ClientStateReport)
+		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/get_webhook") {
+
+			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/get_webhook"), "_")
+			idx := 0
+			if len(r1) == 1 {
+				idx = 0
+			} else {
+				idx, _ = strconv.Atoi(r1[1])
+			}
+
+			client, err := b.getClient(idx)
+			if err != nil {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
+				_, err = b.BotAPI.Send(msg)
+				continue
+			}
+
+			clientInfo, err := client.GetInfo()
+			if err != nil {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
+				_, err = b.BotAPI.Send(msg)
+				continue
+			}
+
+			var tpl bytes.Buffer
+			err = b.webhookTmpl.Execute(&tpl, clientInfo)
+			if err != nil {
+				log.Printf("[telegram] get webhook, template execute error %s", err)
+				continue
+			}
+			message := tpl.String()
+
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, message)
+			msg.ReplyToMessageID = update.Message.MessageID
+
+			_, err = b.BotAPI.Send(msg)
+			if err != nil {
+				log.Printf("[telegram] balance, send msg error %s", err)
+			}
+		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/set_webhook") {
+
+			r0 := strings.TrimPrefix(update.Message.Text, "/set_webhook")
+			r2 := strings.Split(r0, " ")
+
+			if len(r2) != 2 {
+				continue
+			}
+
+			r1 := strings.Split(r2[0], "_")
+
+			idx := 0
+			if len(r1) == 1 {
+				idx = 0
+			} else {
+				idx, _ = strconv.Atoi(r1[1])
+			}
+
+			if !IsURL(r2[1]) {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Incorrect url")
+				_, err = b.BotAPI.Send(msg)
+				continue
+			}
+
+			client, err := b.getClient(idx)
+			if err != nil {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
+				_, err = b.BotAPI.Send(msg)
+				continue
+			}
+
+			response, err := client.SetWebHook(r2[1])
+			if err != nil {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
+				_, err = b.BotAPI.Send(msg)
+				continue
+			}
+
+			message := response.Status
+			if message == "" {
+				message = fmt.Sprintf("error: %s", response.ErrorDescription)
+			}
+
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, message)
+			msg.ReplyToMessageID = update.Message.MessageID
+
+			_, err = b.BotAPI.Send(msg)
+			if err != nil {
+				log.Printf("[telegram] balance, send msg error %s", err)
+			}
 		} else if update.Message != nil {
 
 			client, err := b.getClientByState(ClientStateReport)
@@ -457,7 +553,7 @@ func (b bot) getClientByID(id uint32) (Client, error) {
 		}
 	}
 
-	return nil, errors.New("please repeat a command for client")
+	return nil, errors.New("client does not found")
 }
 
 func (b bot) normalizePrice(price int) string {

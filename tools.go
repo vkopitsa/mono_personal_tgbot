@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -232,4 +233,10 @@ func callbackQueryDataBulder(prefix string, data pageData) string {
 		data.ClientID,
 		//data.Page,
 	)
+}
+
+// IsURL is a url validate function
+func IsURL(str string) bool {
+	u, err := url.Parse(str)
+	return err == nil && u.Scheme != "" && u.Host != ""
 }

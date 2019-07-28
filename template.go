@@ -15,7 +15,7 @@ var statementTemplate = `{{ getIcon . }} {{ normalizePrice .Amount }}{{if .Cashb
 var balanceTemplate = `Баланс: {{ normalizePrice .Balance }}`
 
 // Report template, Use the ReportPage structure
-var reportPageTemplate = `Spent: {{ normalizePrice .SpentTotal }}, Cashback: {{ normalizePrice .CashbackAmountTotal }}
+var reportPageTemplate = `Витрачено: {{ normalizePrice .SpentTotal }}, Кешбек: {{ normalizePrice .CashbackAmountTotal }}
 
 {{range $item := .StatementItems }}{{ getIcon $item }} {{ normalizePrice $item.Amount }}{{if $item.CashbackAmount }}, Кешбек: {{ normalizePrice $item.CashbackAmount }}{{end}}
 {{ $item.Description }}{{if $item.Comment }}
@@ -23,6 +23,9 @@ var reportPageTemplate = `Spent: {{ normalizePrice .SpentTotal }}, Cashback: {{ 
 Баланс: {{ normalizePrice $item.Balance }}
 
 {{end}}`
+
+// WebHook template, use the ClientInfo structure
+var webhookTemplate = `Вебхук: {{if .WebHookURL }}{{ .WebHookURL }}{{else}} Відсутній {{end}}`
 
 // mccIconMap is map to help converting MMC code to emoji
 // see https://mcc.in.ua/ to explain a code
