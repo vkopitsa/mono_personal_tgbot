@@ -5,11 +5,12 @@ import (
 	"html/template"
 )
 
-// Statement template, use the StatementItem structure
-var statementTemplate = `{{ getIcon . }} {{ normalizePrice .Amount }}{{if .CashbackAmount }}, Кешбек: {{ normalizePrice .CashbackAmount }}{{end}}
-{{ .Description }}{{if .Comment }}
-Коментар: {{ .Comment }}{{end}}
-Баланс: {{ normalizePrice .Balance }}`
+// Statement template, use the StatementItem structure and Name field
+var statementTemplate = ` {{ .Name }}
+{{ getIcon .StatementItem }} {{ normalizePrice .StatementItem.Amount }}{{if .StatementItem.CashbackAmount }}, Кешбек: {{ normalizePrice .StatementItem.CashbackAmount }}{{end}}
+{{ .StatementItem.Description }}{{if .StatementItem.Comment }}
+Коментар: {{ .StatementItem.Comment }}{{end}}
+Баланс: {{ normalizePrice .StatementItem.Balance }}`
 
 // Balance template, use the Account structure
 var balanceTemplate = `Баланс: {{ normalizePrice .Balance }}`

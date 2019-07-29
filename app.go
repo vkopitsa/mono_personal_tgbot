@@ -12,6 +12,12 @@ func main() {
 		os.Getenv("MONO_TOKENS"),
 	)
 
+	// init clients
+	err := bot.InitMonoClients()
+	if err != nil {
+		panic(err)
+	}
+
 	go bot.TelegramStart()
 	go bot.ProcessingStart()
 

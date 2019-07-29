@@ -25,40 +25,9 @@ type StatementItemData struct {
 	} `json:"data"`
 }
 
-// StatementItem is a statement data
-type StatementItem struct {
-	ID              string `json:"id"`
-	Time            int    `json:"time"`
-	Description     string `json:"description"`
-	Comment         string `json:"comment,omitempty"`
-	Mcc             int    `json:"mcc"`
-	Amount          int    `json:"amount"`
-	OperationAmount int    `json:"operationAmount"`
-	CurrencyCode    int    `json:"currencyCode"`
-	CommissionRate  int    `json:"commissionRate"`
-	CashbackAmount  int    `json:"cashbackAmount"`
-	Balance         int    `json:"balance"`
-	Hold            bool   `json:"hold"`
-}
-
-// Account is a account information
-type Account struct {
-	ID           string `json:"id"`
-	CurrencyCode int    `json:"currencyCode"`
-	CashbackType string `json:"cashbackType"`
-	Balance      int    `json:"balance"`
-	CreditLimit  int    `json:"creditLimit"`
-}
-
-// ClientInfo is a client information
-type ClientInfo struct {
-	Name       string    `json:"name"`
-	WebHookURL string    `json:"webHookUrl,omitempty"`
-	Accounts   []Account `json:"accounts"`
-}
-
 // Bot is the interface representing bot object.
 type Bot interface {
+	InitMonoClients() error
 	TelegramStart()
 	WebhookStart()
 	ProcessingStart()
@@ -120,6 +89,16 @@ func New(telegramToken, telegramAdmins, telegramChats, monoTokens string) Bot {
 	}
 
 	return &b
+}
+
+// InitMonoClients gets needed client data for correct working of the bot
+func (b *bot) InitMonoClients() error {
+	for _, client := range b.clients {
+		if err := client.Init(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TelegramStart starts getting updates from telegram.
@@ -464,8 +443,27 @@ func (b *bot) ProcessingStart() {
 	for {
 		select {
 		case statementItemData := <-b.ch:
+
+			client, err := b.getClientByAccountID(statementItemData.Data.Account)
+			if err != nil {
+				log.Printf("[processing] get clietn by account error %s", err)
+				continue
+			}
+
+			// trigger on new StatementItem
+			client.AddStatementItem(
+				statementItemData.Data.Account,
+				statementItemData.Data.StatementItem,
+			)
+
 			var tpl bytes.Buffer
-			err := b.statementTmpl.Execute(&tpl, statementItemData.Data.StatementItem)
+			err = b.statementTmpl.Execute(&tpl, struct {
+				Name          string
+				StatementItem StatementItem
+			}{
+				Name:          client.GetName(),
+				StatementItem: statementItemData.Data.StatementItem,
+			})
 			if err != nil {
 				log.Printf("[processing] template execute error %s", err)
 				continue
@@ -550,6 +548,19 @@ func (b bot) getClientByID(id uint32) (Client, error) {
 	for _, client := range b.clients {
 		if client.GetID() == id {
 			return client, nil
+		}
+	}
+
+	return nil, errors.New("client does not found")
+}
+
+func (b bot) getClientByAccountID(id string) (Client, error) {
+	for _, client := range b.clients {
+		info, _ := client.GetInfo()
+		for _, account := range info.Accounts {
+			if account.ID == id {
+				return client, nil
+			}
 		}
 	}
 

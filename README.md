@@ -23,15 +23,17 @@ Run `mono_personal_tgbot` execution file in your terminal with following env var
 `TELEGRAM_TOKEN`         | [How to get telegram bot token](https://core.telegram.org/bots#3-how-do-i-create-a-bot)
 `TELEGRAM_ADMINS`        | ids of the trusted user, example: `1234567,1234567`
 `TELEGRAM_CHATS`         | ids of the trusted chats, example: `-1234567,-1234567`
-`MONO_TOKEN`             | [How to get monobank token](https://api.monobank.ua/)
-`SET_WEBHOOK`            | url to receive new statement, example: `https://you_domain/web_hook`
+`MONO_TOKENS`            | list of the tokens and it is `number`. [How to get monobank token](https://api.monobank.ua/)
 
 ### Telegram commands
 
  Command                 | Description
 ------------------------ | -----------------------------------------------------------
-`/balance`               | Get `UAH` balance of your account 
-`/report`                | Get a report for the period
+`/balance[_n]`           | Get `UAH` balance of the default client or first one or by number. example: `/balance`, `/balance_1`
+`/report`                | Get a report for the period of the default client or first one or by number. example: `/report`, `/report_1`
+`/get_webhook[_n]`       | Get a status about setup webhook of the default client or first one or by number. example: `/get_webhook`, `/get_webhook_1`
+`/set_webhook[_n]`       | Set webhook url to monobank api of the default client or first one or by number. example: `/set_webhook`, `/set_webhook_1`
+
 
 ## Usage with docker-compose
 

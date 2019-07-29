@@ -15,6 +15,38 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// StatementItem is a statement data
+type StatementItem struct {
+	ID              string `json:"id"`
+	Time            int    `json:"time"`
+	Description     string `json:"description"`
+	Comment         string `json:"comment,omitempty"`
+	Mcc             int    `json:"mcc"`
+	Amount          int    `json:"amount"`
+	OperationAmount int    `json:"operationAmount"`
+	CurrencyCode    int    `json:"currencyCode"`
+	CommissionRate  int    `json:"commissionRate"`
+	CashbackAmount  int    `json:"cashbackAmount"`
+	Balance         int    `json:"balance"`
+	Hold            bool   `json:"hold"`
+}
+
+// Account is a account information
+type Account struct {
+	ID           string `json:"id"`
+	CurrencyCode int    `json:"currencyCode"`
+	CashbackType string `json:"cashbackType"`
+	Balance      int    `json:"balance"`
+	CreditLimit  int    `json:"creditLimit"`
+}
+
+// ClientInfo is a client information
+type ClientInfo struct {
+	Name       string    `json:"name"`
+	WebHookURL string    `json:"webHookUrl,omitempty"`
+	Accounts   []Account `json:"accounts"`
+}
+
 // WebHookResponse is a response from api on setup webhook
 type WebHookResponse struct {
 	ErrorDescription string `json:"errorDescription"`
@@ -23,15 +55,18 @@ type WebHookResponse struct {
 
 // Client is the interface representing client object.
 type Client interface {
+	Init() error
 	GetID() uint32
 	GetReport() Report
 	GetInfo() (ClientInfo, error)
 	GetStatement(command string) ([]StatementItem, error)
 	SetWebHook(url string) (WebHookResponse, error)
+	GetName() string
 
 	IsState(flag ClientState) bool
 	Can(flag ClientState) bool
 	SetState(flag ClientState)
+	AddStatementItem(string, StatementItem)
 }
 
 // ClientState is a state type
@@ -79,6 +114,11 @@ func NewClient(token string) Client {
 	}
 }
 
+func (c *client) Init() error {
+	_, err := c.GetInfo()
+	return err
+}
+
 func (c client) GetID() uint32 {
 	return c.id
 }
@@ -101,6 +141,14 @@ func (c *client) GetInfo() (ClientInfo, error) {
 
 	log.Printf("[monoapi] get info, waiting 1 minute")
 	return ClientInfo{}, errors.New("please waiting 1 minute and then try again")
+}
+
+// GetName return name of the client
+func (c client) GetName() string {
+	if c.Info == nil {
+		return "NoName"
+	}
+	return c.Info.Name
 }
 
 // SetWebHook is a function set up the monobank webhook.
@@ -138,6 +186,10 @@ func (c client) SetWebHook(url string) (WebHookResponse, error) {
 
 	log.Printf("[monoapi] webhook, responce %s", string(body))
 	return response, err
+}
+
+func (c *client) AddStatementItem(account string, statementItem StatementItem) {
+	c.GetReport().ResetLastData()
 }
 
 func (c client) GetStatement(command string) ([]StatementItem, error) {

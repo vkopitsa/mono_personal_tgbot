@@ -44,6 +44,7 @@ type Report interface {
 	IsExistGridData(update tgbotapi.Update) bool
 	SetGridData(update tgbotapi.Update, items []StatementItem)
 	GetPeriodFromUpdate(update tgbotapi.Update) string
+	ResetLastData()
 }
 
 type report struct {
@@ -306,4 +307,17 @@ func (r report) GetPeriodFromUpdate(update tgbotapi.Update) string {
 	}
 
 	return ""
+}
+
+func (r *report) ResetLastData() {
+
+	keys := []string{"Today", "This week", "Last week", "This month", "Last month"}
+
+	for cacheKey := range r.cache {
+		for _, key := range keys {
+			if strings.Contains(cacheKey, key) {
+				delete(r.cache, key)
+			}
+		}
+	}
 }
