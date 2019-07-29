@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"html/template"
 	"log"
-	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -40,11 +39,12 @@ type Report interface {
 	GetKeyboardMessageConfig(update tgbotapi.Update) tgbotapi.MessageConfig
 	IsReportGridCommand(update tgbotapi.Update) bool
 	IsReportGridPageCommand(update tgbotapi.Update) bool
-	GetReportGrid(update tgbotapi.Update) tgbotapi.MessageConfig
+	GetReportGrid(update tgbotapi.Update, clientID uint32) tgbotapi.MessageConfig
 	GetUpdatedReportGrid(update tgbotapi.Update) (tgbotapi.EditMessageTextConfig, error)
 	IsExistGridData(update tgbotapi.Update) bool
 	SetGridData(update tgbotapi.Update, items []StatementItem)
 	GetPeriodFromUpdate(update tgbotapi.Update) string
+	ResetLastData()
 }
 
 type report struct {
@@ -92,7 +92,7 @@ func (r *report) getCacheKay(update tgbotapi.Update) string {
 		fromID = update.Message.From.ID
 		chatID = update.Message.Chat.ID
 	} else {
-		data := r.callbackQueryDataParser(update.CallbackQuery.Data)
+		data := callbackQueryDataParser(update.CallbackQuery.Data)
 		key = data.Period
 
 		fromID = update.CallbackQuery.Message.ReplyToMessage.From.ID
@@ -115,7 +115,7 @@ func (r report) IsExistGridData(update tgbotapi.Update) bool {
 	return ok
 }
 
-func (r *report) GetReportGrid(update tgbotapi.Update) tgbotapi.MessageConfig {
+func (r *report) GetReportGrid(update tgbotapi.Update, clientID uint32) tgbotapi.MessageConfig {
 	items := r.cache[r.getCacheKay(update)]
 
 	var tpl bytes.Buffer
@@ -126,12 +126,14 @@ func (r *report) GetReportGrid(update tgbotapi.Update) tgbotapi.MessageConfig {
 	}
 	message := tpl.String()
 
-	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(getPaginateButtons(len(items), 1, r.perPage, r.callbackQueryDataBulder(pageData{
-		Page:   1,
-		Period: update.Message.Text,
-		ChatID: update.Message.Chat.ID,
-		FromID: update.Message.From.ID,
-	})))
+	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(
+		getPaginateButtons(len(items), 1, r.perPage, callbackQueryDataBulder(r.prefix, pageData{
+			Page:     1,
+			Period:   update.Message.Text,
+			ChatID:   update.Message.Chat.ID,
+			FromID:   update.Message.From.ID,
+			ClientID: clientID,
+		})))
 
 	messageConfig := tgbotapi.MessageConfig{}
 	messageConfig.Text = message
@@ -144,7 +146,7 @@ func (r *report) GetReportGrid(update tgbotapi.Update) tgbotapi.MessageConfig {
 
 func (r report) GetUpdatedReportGrid(update tgbotapi.Update) (tgbotapi.EditMessageTextConfig, error) {
 	items := r.cache[r.getCacheKay(update)]
-	data := r.callbackQueryDataParser(update.CallbackQuery.Data)
+	data := callbackQueryDataParser(update.CallbackQuery.Data)
 
 	var tpl bytes.Buffer
 	err := r.tmpl.Execute(&tpl, r.buildReportPage(items, data.Page, r.perPage))
@@ -154,7 +156,14 @@ func (r report) GetUpdatedReportGrid(update tgbotapi.Update) (tgbotapi.EditMessa
 	}
 	message := tpl.String()
 
-	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(getPaginateButtons(len(items), data.Page, r.perPage, r.callbackQueryDataBulder(data)))
+	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(
+		getPaginateButtons(
+			len(items),
+			data.Page,
+			r.perPage,
+			callbackQueryDataBulder(r.prefix, data),
+		),
+	)
 
 	messageConfig := tgbotapi.NewEditMessageText(
 		update.CallbackQuery.Message.Chat.ID,
@@ -199,45 +208,6 @@ func (r report) buildReportPage(items []StatementItem, page, limit int) ReportPa
 		SpentTotal:          spentTotal,
 		CashbackAmountTotal: cashbackAmountTotal,
 	}
-}
-
-type pageData struct {
-	Page   int
-	FromID int
-	ChatID int64
-	Period string
-}
-
-func (r report) callbackQueryDataParser(data string) pageData {
-	// prefix + Period + FromID + ChatID + page
-	// example: r:1:12321324:312234234:1
-	arr := strings.Split(data, ":")
-
-	// not checking errors because it always will be correct numbers
-	period := arr[1]
-	fromID, _ := strconv.Atoi(arr[2])
-	chatID, _ := strconv.ParseInt(arr[3], 10, 64)
-	page, _ := strconv.Atoi(arr[4])
-
-	return pageData{
-		Page:   page,
-		Period: period,
-		FromID: fromID,
-		ChatID: chatID,
-	}
-}
-
-func (r report) callbackQueryDataBulder(data pageData) string {
-	// prefix + Period + FromID + ChatID + page
-	// example: r:1:12321324:312234234:1
-
-	return fmt.Sprintf("%s%s:%d:%d:",
-		r.prefix,
-		data.Period,
-		data.FromID,
-		data.ChatID,
-		//data.Page,
-	)
 }
 
 func (r report) IsReportGridPageCommand(update tgbotapi.Update) bool {
@@ -337,4 +307,17 @@ func (r report) GetPeriodFromUpdate(update tgbotapi.Update) string {
 	}
 
 	return ""
+}
+
+func (r *report) ResetLastData() {
+
+	keys := []string{"Today", "This week", "Last week", "This month", "Last month"}
+
+	for cacheKey := range r.cache {
+		for _, key := range keys {
+			if strings.Contains(cacheKey, key) {
+				delete(r.cache, key)
+			}
+		}
+	}
 }

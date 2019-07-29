@@ -5,17 +5,18 @@ import (
 	"html/template"
 )
 
-// Statement template, use the StatementItem structure
-var statementTemplate = `{{ getIcon . }} {{ normalizePrice .Amount }}{{if .CashbackAmount }}, Кешбек: {{ normalizePrice .CashbackAmount }}{{end}}
-{{ .Description }}{{if .Comment }}
-Коментар: {{ .Comment }}{{end}}
-Баланс: {{ normalizePrice .Balance }}`
+// Statement template, use the StatementItem structure and Name field
+var statementTemplate = ` {{ .Name }}
+{{ getIcon .StatementItem }} {{ normalizePrice .StatementItem.Amount }}{{if .StatementItem.CashbackAmount }}, Кешбек: {{ normalizePrice .StatementItem.CashbackAmount }}{{end}}
+{{ .StatementItem.Description }}{{if .StatementItem.Comment }}
+Коментар: {{ .StatementItem.Comment }}{{end}}
+Баланс: {{ normalizePrice .StatementItem.Balance }}`
 
 // Balance template, use the Account structure
 var balanceTemplate = `Баланс: {{ normalizePrice .Balance }}`
 
 // Report template, Use the ReportPage structure
-var reportPageTemplate = `Spent: {{ normalizePrice .SpentTotal }}, Cashback: {{ normalizePrice .CashbackAmountTotal }}
+var reportPageTemplate = `Витрачено: {{ normalizePrice .SpentTotal }}, Кешбек: {{ normalizePrice .CashbackAmountTotal }}
 
 {{range $item := .StatementItems }}{{ getIcon $item }} {{ normalizePrice $item.Amount }}{{if $item.CashbackAmount }}, Кешбек: {{ normalizePrice $item.CashbackAmount }}{{end}}
 {{ $item.Description }}{{if $item.Comment }}
@@ -23,6 +24,9 @@ var reportPageTemplate = `Spent: {{ normalizePrice .SpentTotal }}, Cashback: {{ 
 Баланс: {{ normalizePrice $item.Balance }}
 
 {{end}}`
+
+// WebHook template, use the ClientInfo structure
+var webhookTemplate = `Вебхук: {{if .WebHookURL }}{{ .WebHookURL }}{{else}} Відсутній {{end}}`
 
 // mccIconMap is map to help converting MMC code to emoji
 // see https://mcc.in.ua/ to explain a code
