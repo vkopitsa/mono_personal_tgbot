@@ -199,6 +199,9 @@ func (b *bot) TelegramStart() {
 		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/report") {
 			log.Printf("[telegram] report show keyboard")
 
+			// reset state
+			b.resetClientState()
+
 			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/report"), "_")
 			idx := 0
 			if len(r1) == 1 {
@@ -325,17 +328,19 @@ func (b *bot) TelegramStart() {
 
 			log.Printf("[telegram] report grid")
 
-			items, err := client.GetStatement(client.GetReport().GetPeriodFromUpdate(update))
-			if err != nil {
-				log.Printf("[telegram] report get statements error %s", err)
+			if !client.GetReport().IsExistGridData(update) {
+				items, err := client.GetStatement(client.GetReport().GetPeriodFromUpdate(update))
+				if err != nil {
+					log.Printf("[telegram] report get statements error %s", err)
 
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
-				continue
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
+					_, err = b.BotAPI.Send(msg)
+					continue
+				}
+
+				// set statement data
+				client.GetReport().SetGridData(update, items)
 			}
-
-			// set statement data
-			client.GetReport().SetGridData(update, items)
 
 			_, err = b.BotAPI.Send(client.GetReport().GetReportGrid(update, client.GetID()))
 			if err != nil {
@@ -346,11 +351,18 @@ func (b *bot) TelegramStart() {
 			messageConfig.Text = "ᅠ "
 			messageConfig.ChatID = update.Message.Chat.ID
 			messageConfig.ReplyMarkup = tgbotapi.NewRemoveKeyboard(false)
-			_, err = b.BotAPI.Send(messageConfig)
+			emptyMessage, err := b.BotAPI.Send(messageConfig)
 			if err != nil {
 				log.Printf("[telegram] remove keyboard error %s", err)
 			}
 
+			// reset state
+			b.resetClientState()
+
+			_, err = b.BotAPI.Send(tgbotapi.NewDeleteMessage(emptyMessage.Chat.ID, emptyMessage.MessageID))
+			if err != nil {
+				log.Printf("[telegram] remove empty message error %s", err)
+			}
 		} else if update.CallbackQuery != nil {
 
 			client, err := b.getClientByID(callbackQueryDataParser(update.CallbackQuery.Data).ClientID)
@@ -399,8 +411,8 @@ func (b *bot) TelegramStart() {
 				log.Printf("[telegram] report grid send callback answer error %s", err)
 			}
 
-			// set state of the client
-			client.SetState(ClientStateNone)
+			// reset state
+			b.resetClientState()
 		}
 	}
 }
@@ -542,6 +554,12 @@ func (b bot) getClientByState(state ClientState) (Client, error) {
 	}
 
 	return nil, errors.New("please repeat a command for client")
+}
+
+func (b *bot) resetClientState() {
+	for _, client := range b.clients {
+		client.SetState(ClientStateNone)
+	}
 }
 
 func (b bot) getClientByID(id uint32) (Client, error) {

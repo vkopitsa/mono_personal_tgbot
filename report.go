@@ -313,6 +313,9 @@ func (r *report) ResetLastData() {
 
 	keys := []string{"Today", "This week", "Last week", "This month", "Last month"}
 
+	_, month, _ := time.Now().Date()
+	keys = append(keys, month.String())
+
 	for cacheKey := range r.cache {
 		for _, key := range keys {
 			if strings.Contains(cacheKey, key) {
