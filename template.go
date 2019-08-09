@@ -40,6 +40,9 @@ var mccIconMap = map[int]string{
 	6011: "🏧",
 	4814: "📱",
 	7399: "💼",
+	2842: "🔧",
+	5977: "💋",
+	5912: "💊",
 }
 
 // GetTempate is a function to parse template with functions
