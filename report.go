@@ -319,7 +319,7 @@ func (r *report) ResetLastData() {
 	for cacheKey := range r.cache {
 		for _, key := range keys {
 			if strings.Contains(cacheKey, key) {
-				delete(r.cache, key)
+				delete(r.cache, cacheKey)
 			}
 		}
 	}
