@@ -13,5 +13,6 @@ services:
       - MONO_TOKEN=${MONO_TOKEN}
       - TELEGRAM_ADMINS=${TELEGRAM_ADMINS}
       - TELEGRAM_CHATS=${TELEGRAM_CHATS}
+      - LOG_LEVEL=${LOG_LEVEL}
     ports:
       - ${APP_PORT}:8080

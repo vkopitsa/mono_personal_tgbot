@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
-	"log"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 
@@ -36,23 +37,26 @@ var reportCommant = map[string]string{
 
 // Report is the interface representing report object.
 type Report interface {
-	GetKeyboardMessageConfig(update tgbotapi.Update) tgbotapi.MessageConfig
+	GetKeyboarButtonConfig(update tgbotapi.Update, clientID uint32) tgbotapi.EditMessageTextConfig
 	IsReportGridCommand(update tgbotapi.Update) bool
 	IsReportGridPageCommand(update tgbotapi.Update) bool
-	GetReportGrid(update tgbotapi.Update, clientID uint32) tgbotapi.MessageConfig
+	GetReportGrid(update tgbotapi.Update, clientID uint32) tgbotapi.EditMessageTextConfig
 	GetUpdatedReportGrid(update tgbotapi.Update) (tgbotapi.EditMessageTextConfig, error)
 	IsExistGridData(update tgbotapi.Update) bool
 	SetGridData(update tgbotapi.Update, items []StatementItem)
 	GetPeriodFromUpdate(update tgbotapi.Update) string
 	ResetLastData()
+	IsAccount(accountId string) bool
 }
 
 type report struct {
 	cache map[string][]StatementItem
 
-	prefix  string
-	perPage int
-	tmpl    *template.Template
+	prefix    string
+	perPage   int
+	tmpl      *template.Template
+	accountId string
+	clientId  uint32
 }
 
 // ReportPage is a structure to render  report content the telegram
@@ -60,23 +64,26 @@ type ReportPage struct {
 	StatementItems      []StatementItem // items per page
 	SpentTotal          int             // total for the period
 	AmountTotal         int             // total for the period
+	CurrencyCode        int             // total for the period
 	CashbackAmountTotal int             // total for the period
 	Period              string
 }
 
 // NewReport returns a report object.
-func NewReport() Report {
+func NewReport(accountId string, clientId uint32) Report {
 
 	tmpl, err := GetTempate(reportPageTemplate)
 	if err != nil {
-		log.Fatalf("[template] %s", err)
+		log.Fatal().Err(err).Msg("[template]")
 	}
 
 	return &report{
-		prefix:  "r:",
-		perPage: 5,
-		cache:   map[string][]StatementItem{},
-		tmpl:    tmpl,
+		prefix:    "rr",
+		perPage:   5,
+		cache:     map[string][]StatementItem{},
+		tmpl:      tmpl,
+		accountId: accountId,
+		clientId:  clientId,
 	}
 }
 
@@ -85,6 +92,7 @@ func (r *report) getCacheKay(update tgbotapi.Update) string {
 
 	var fromID int
 	var chatID int64
+	var clientID uint32
 
 	if update.Message != nil {
 		key = update.Message.Text
@@ -94,15 +102,16 @@ func (r *report) getCacheKay(update tgbotapi.Update) string {
 	} else {
 		data := callbackQueryDataParser(update.CallbackQuery.Data)
 		key = data.Period
+		clientID = data.ClientID
 
 		fromID = update.CallbackQuery.Message.ReplyToMessage.From.ID
 		chatID = update.CallbackQuery.Message.ReplyToMessage.Chat.ID
 	}
 
 	return fmt.Sprintf(
-		"%s-report-%d-%d",
+		"%s-report-%d-%d-%d",
 		key,
-		chatID, fromID,
+		chatID, fromID, clientID,
 	)
 }
 
@@ -115,31 +124,32 @@ func (r report) IsExistGridData(update tgbotapi.Update) bool {
 	return ok
 }
 
-func (r *report) GetReportGrid(update tgbotapi.Update, clientID uint32) tgbotapi.MessageConfig {
+func (r *report) GetReportGrid(update tgbotapi.Update, clientID uint32) tgbotapi.EditMessageTextConfig {
 	items := r.cache[r.getCacheKay(update)]
+	data := callbackQueryDataParser(update.CallbackQuery.Data)
 
 	var tpl bytes.Buffer
 	err := r.tmpl.Execute(&tpl, r.buildReportPage(items, 1, r.perPage))
 	if err != nil {
-		log.Printf("[processing] template execute error %s", err)
-		return tgbotapi.MessageConfig{}
+		log.Error().Err(err).Msg("[processing] template execute error")
+		return tgbotapi.EditMessageTextConfig{}
 	}
 	message := tpl.String()
 
-	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(
-		getPaginateButtons(len(items), 1, r.perPage, callbackQueryDataBulder(r.prefix, pageData{
-			Page:     1,
-			Period:   update.Message.Text,
-			ChatID:   update.Message.Chat.ID,
-			FromID:   update.Message.From.ID,
-			ClientID: clientID,
-		})))
+	tgMessage := update.Message
+	if tgMessage == nil && update.CallbackQuery != nil {
+		tgMessage = update.CallbackQuery.Message
+	}
 
-	messageConfig := tgbotapi.MessageConfig{}
+	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(
+		getPaginateButtons(len(items), 1, r.perPage, callbackQueryDataBuilder(r.prefix, data)))
+
+	messageConfig := tgbotapi.EditMessageTextConfig{}
 	messageConfig.Text = message
-	messageConfig.ChatID = update.Message.Chat.ID
-	messageConfig.ReplyToMessageID = update.Message.MessageID
-	messageConfig.ReplyMarkup = inlineKeyboardMarkup
+	messageConfig.ChatID = tgMessage.Chat.ID
+	// messageConfig.ReplyToMessageID = tgMessage.MessageID
+	messageConfig.MessageID = tgMessage.MessageID
+	messageConfig.ReplyMarkup = &inlineKeyboardMarkup
 
 	return messageConfig
 }
@@ -151,7 +161,7 @@ func (r report) GetUpdatedReportGrid(update tgbotapi.Update) (tgbotapi.EditMessa
 	var tpl bytes.Buffer
 	err := r.tmpl.Execute(&tpl, r.buildReportPage(items, data.Page, r.perPage))
 	if err != nil {
-		log.Printf("[processing] template execute error %s", err)
+		log.Error().Err(err).Msg("[processing] template execute error")
 		return tgbotapi.EditMessageTextConfig{}, err
 	}
 	message := tpl.String()
@@ -161,7 +171,7 @@ func (r report) GetUpdatedReportGrid(update tgbotapi.Update) (tgbotapi.EditMessa
 			len(items),
 			data.Page,
 			r.perPage,
-			callbackQueryDataBulder(r.prefix, data),
+			callbackQueryDataBuilder(r.prefix, data),
 		),
 	)
 
@@ -186,25 +196,30 @@ func (r report) buildReportPage(items []StatementItem, page, limit int) ReportPa
 	var amountTotal int
 	var cashbackAmountTotal int
 	var spentTotal int
+	var currencyCode int
 	for _, item := range items {
 		if item.Amount < 0 {
 			spentTotal += -item.Amount
 		}
 		amountTotal += abs(item.Amount)
 		cashbackAmountTotal += item.CashbackAmount
+		currencyCode = item.CurrencyCode
 	}
 
-	if page == 1 {
-		items = items[:limit]
-	} else if totalPages == page {
-		items = items[(totalPages-1)*limit:]
-	} else {
-		items = items[(page-1)*limit : page*limit]
+	if total > 0 {
+		if page == 1 && len(items) >= limit {
+			items = items[:limit]
+		} else if totalPages == page {
+			items = items[(totalPages-1)*limit:]
+		} else {
+			items = items[(page-1)*limit : page*limit]
+		}
 	}
 
 	return ReportPage{
 		StatementItems:      items,
 		AmountTotal:         amountTotal,
+		CurrencyCode:        currencyCode,
 		SpentTotal:          spentTotal,
 		CashbackAmountTotal: cashbackAmountTotal,
 	}
@@ -220,62 +235,100 @@ func (r report) IsReportGridCommand(update tgbotapi.Update) bool {
 	return ok
 }
 
-func (r report) GetKeyboardMessageConfig(update tgbotapi.Update) tgbotapi.MessageConfig {
-	custom := []tgbotapi.KeyboardButton{
-		tgbotapi.KeyboardButton{
-			Text: "Today",
+func (r report) GetKeyboarButtonConfig(update tgbotapi.Update, clientID uint32) tgbotapi.EditMessageTextConfig {
+	tgMessage := update.Message
+	if tgMessage == nil && update.CallbackQuery != nil {
+		tgMessage = update.CallbackQuery.Message
+	}
+
+	callbackQueryDataPerion := func(p string) *string {
+		d := callbackQueryDataBuilder("rp", pageData{
+			// Page:     1,
+			Period:   strings.ReplaceAll(p, " ", "_"),
+			ChatID:   tgMessage.Chat.ID,
+			FromID:   tgMessage.From.ID,
+			ClientID: r.clientId,
+			Account:  r.accountId,
+		})
+
+		// add page number
+		d = d + "1"
+
+		return &d
+	}
+
+	custom := []tgbotapi.InlineKeyboardButton{
+		{
+			Text:         "Today",
+			CallbackData: callbackQueryDataPerion("Today"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "This week",
+		{
+			Text:         "This week",
+			CallbackData: callbackQueryDataPerion("This week"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "Last week",
+		{
+			Text:         "Last week",
+			CallbackData: callbackQueryDataPerion("Last week"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "This month",
+		{
+			Text:         "This month",
+			CallbackData: callbackQueryDataPerion("This month"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "Last month",
+		{
+			Text:         "Last month",
+			CallbackData: callbackQueryDataPerion("Last month"),
 		},
 	}
-	months := []tgbotapi.KeyboardButton{
-		tgbotapi.KeyboardButton{
-			Text: "January",
+	months := []tgbotapi.InlineKeyboardButton{
+		{
+			Text:         "January",
+			CallbackData: callbackQueryDataPerion("January"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "February",
+		{
+			Text:         "February",
+			CallbackData: callbackQueryDataPerion("February"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "March",
+		{
+			Text:         "March",
+			CallbackData: callbackQueryDataPerion("March"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "April",
+		{
+			Text:         "April",
+			CallbackData: callbackQueryDataPerion("April"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "May",
+		{
+			Text:         "May",
+			CallbackData: callbackQueryDataPerion("May"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "June",
+		{
+			Text:         "June",
+			CallbackData: callbackQueryDataPerion("June"),
 		},
 	}
-	months2 := []tgbotapi.KeyboardButton{
-		tgbotapi.KeyboardButton{
-			Text: "July",
+	months2 := []tgbotapi.InlineKeyboardButton{
+		{
+			Text:         "July",
+			CallbackData: callbackQueryDataPerion("July"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "August",
+		{
+			Text:         "August",
+			CallbackData: callbackQueryDataPerion("August"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "September",
+		{
+			Text:         "September",
+			CallbackData: callbackQueryDataPerion("September"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "October",
+		{
+			Text:         "October",
+			CallbackData: callbackQueryDataPerion("October"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "November",
+		{
+			Text:         "November",
+			CallbackData: callbackQueryDataPerion("November"),
 		},
-		tgbotapi.KeyboardButton{
-			Text: "December",
+		{
+			Text:         "December",
+			CallbackData: callbackQueryDataPerion("December"),
 		},
 	}
 
@@ -287,14 +340,13 @@ func (r report) GetKeyboardMessageConfig(update tgbotapi.Update) tgbotapi.Messag
 		months2 = months2[:month-6]
 	}
 
-	replyKeyboard := tgbotapi.NewReplyKeyboard(custom, months, months2)
-	replyKeyboard.OneTimeKeyboard = true
+	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(custom, months, months2)
 
-	messageConfig := tgbotapi.MessageConfig{}
-	messageConfig.Text = "Selecte a month"
-	messageConfig.ChatID = update.Message.Chat.ID
-	messageConfig.ReplyToMessageID = update.Message.MessageID
-	messageConfig.ReplyMarkup = replyKeyboard
+	messageConfig := tgbotapi.EditMessageTextConfig{}
+	messageConfig.Text = "Виберіть період"
+	messageConfig.ChatID = tgMessage.Chat.ID
+	messageConfig.MessageID = tgMessage.MessageID
+	messageConfig.ReplyMarkup = &inlineKeyboardMarkup
 
 	return messageConfig
 }
@@ -323,4 +375,8 @@ func (r *report) ResetLastData() {
 			}
 		}
 	}
+}
+
+func (r *report) IsAccount(accountId string) bool {
+	return r.accountId == accountId
 }
