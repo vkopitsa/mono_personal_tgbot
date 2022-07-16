@@ -2,26 +2,31 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"html/template"
 )
 
 // Statement template, use the StatementItem structure and Name field
 var statementTemplate = ` {{ .Name }}
-{{ getIcon .StatementItem }} {{ normalizePrice .StatementItem.Amount }}{{if .StatementItem.CashbackAmount }}, Кешбек: {{ normalizePrice .StatementItem.CashbackAmount }}{{end}}
-{{ .StatementItem.Description }}{{if .StatementItem.Comment }}
-Коментар: {{ .StatementItem.Comment }}{{end}}
-Баланс: {{ normalizePrice .StatementItem.Balance }}`
+{{ getIcon .StatementItem }} {{ normalizePrice .StatementItem.Amount }}{{ getCurrencySymbol .Account.CurrencyCode }}{{ if ne .StatementItem.Amount .StatementItem.OperationAmount }} ({{ normalizePrice .StatementItem.OperationAmount }}{{ getCurrencySymbol .StatementItem.CurrencyCode }}){{end}}{{if .StatementItem.CashbackAmount }}, Кешбек: {{ normalizePrice .StatementItem.CashbackAmount }}{{ getCurrencySymbol .StatementItem.CurrencyCode }}{{end}}
+{{ unescapeString .StatementItem.Description }}{{if .StatementItem.Comment }}
+Коментар: {{ unescapeString .StatementItem.Comment }}{{end}}
+Баланс: {{ normalizePrice .StatementItem.Balance }}{{ getCurrencySymbol .Account.CurrencyCode }}`
 
 // Balance template, use the Account structure
-var balanceTemplate = `Баланс: {{ normalizePrice .Balance }}`
+var balanceTemplate = `{{ .Name }}
+
+{{range $item := .Accounts }}- {{ .Type }}
+Баланс: {{ normalizePrice $item.Balance }}{{ getCurrencySymbol $item.CurrencyCode }}
+{{end}}`
 
 // Report template, Use the ReportPage structure
-var reportPageTemplate = `Витрачено: {{ normalizePrice .SpentTotal }}, Кешбек: {{ normalizePrice .CashbackAmountTotal }}
+var reportPageTemplate = `Витрачено: {{ normalizePrice .SpentTotal }}{{ getCurrencySymbol .CurrencyCode }}, Кешбек: {{ normalizePrice .CashbackAmountTotal }}{{ getCurrencySymbol .CurrencyCode }}
 
-{{range $item := .StatementItems }}{{ getIcon $item }} {{ normalizePrice $item.Amount }}{{if $item.CashbackAmount }}, Кешбек: {{ normalizePrice $item.CashbackAmount }}{{end}}
-{{ $item.Description }}{{if $item.Comment }}
-Коментар: {{ $item.Comment }}{{end}}
-Баланс: {{ normalizePrice $item.Balance }}
+{{range $item := .StatementItems }}{{ getIcon $item }} {{ normalizePrice $item.Amount }}{{ getCurrencySymbol .CurrencyCode }} {{ if ne $item.Amount $item.OperationAmount }} ({{ normalizePrice $item.OperationAmount }}{{ getCurrencySymbol $item.CurrencyCode }}){{end}}{{if $item.CashbackAmount }}, Кешбек: {{ normalizePrice $item.CashbackAmount }}{{ getCurrencySymbol $item.CurrencyCode }}{{end}}
+{{ unescapeString $item.Description }}{{if $item.Comment }}
+Коментар: {{ unescapeString $item.Comment }}{{end}}
+Баланс: {{ normalizePrice $item.Balance }}{{ getCurrencySymbol $item.CurrencyCode }}
 
 {{end}}`
 
@@ -45,19 +50,23 @@ var mccIconMap = map[int]string{
 	5912: "💊",
 }
 
+// currencySymbolMap is map to help converting currency code to Symbol
+var currencySymbolMap = map[int]string{
+	980: "₴",
+	840: "$",
+	978: "€",
+	985: "zł",
+	203: "Kč",
+}
+
 // GetTempate is a function to parse template with functions
 func GetTempate(templateBody string) (*template.Template, error) {
 	return template.New("message").
 		Funcs(template.FuncMap{
-			"normalizePrice": func(price int) string {
-				if price%100 == 0 {
-					return fmt.Sprintf("%d₴", price/100)
-				}
-				return fmt.Sprintf("%.2f₴", float64(price)/100.0)
-			},
-			"getIcon": func(statementItem StatementItem) string {
-				return GetIconByStatementItem(statementItem)
-			},
+			"normalizePrice":    NormalizePrice,
+			"getIcon":           GetIconByStatementItem,
+			"getCurrencySymbol": GetCurrencySymbol,
+			"unescapeString":    html.UnescapeString,
 		}).
 		Parse(templateBody)
 }
@@ -78,9 +87,28 @@ func GetIconByStatementItem(statementItem StatementItem) string {
 
 	mccIcon, ok := mccIconMap[statementItem.Mcc]
 	if ok {
-		// defoult emoji
 		icon = mccIcon
 	}
 
 	return icon
+}
+
+// GetCurrencySymbol is a function get currency symbol by code
+func GetCurrencySymbol(currencyCode int) string {
+	symbol := ""
+
+	currencySymbol, ok := currencySymbolMap[currencyCode]
+	if ok {
+		symbol = currencySymbol
+	}
+
+	return symbol
+}
+
+// NormalizePrice is a function to normalize price
+func NormalizePrice(price int) string {
+	if price%100 == 0 {
+		return fmt.Sprintf("%d", price/100)
+	}
+	return fmt.Sprintf("%.2f", float64(price)/100.0)
 }

@@ -1,14 +1,21 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	"github.com/rs/zerolog/log"
+
+	"github.com/snabb/isoweek"
+	"golang.org/x/exp/constraints"
 )
 
 func getPaginateButtons(total int, page int, limit int, data string) []tgbotapi.InlineKeyboardButton {
@@ -32,7 +39,7 @@ func getPaginateButtons(total int, page int, limit int, data string) []tgbotapi.
 
 			pageCallbackData := fmt.Sprintf("%s1", data)
 			buttons = append(buttons, tgbotapi.InlineKeyboardButton{
-				Text:         fmt.Sprintf("«1"),
+				Text:         "«1",
 				CallbackData: &pageCallbackData,
 			})
 		} else if page > 3 && page > totalPages-2 {
@@ -41,7 +48,7 @@ func getPaginateButtons(total int, page int, limit int, data string) []tgbotapi.
 
 			pageCallbackData := fmt.Sprintf("%s1", data)
 			buttons = append(buttons, tgbotapi.InlineKeyboardButton{
-				Text:         fmt.Sprintf("«1"),
+				Text:         "«1",
 				CallbackData: &pageCallbackData,
 			})
 		} else if page > 3 {
@@ -50,7 +57,7 @@ func getPaginateButtons(total int, page int, limit int, data string) []tgbotapi.
 
 			pageCallbackData := fmt.Sprintf("%s1", data)
 			buttons = append(buttons, tgbotapi.InlineKeyboardButton{
-				Text:         fmt.Sprintf("«1"),
+				Text:         "«1",
 				CallbackData: &pageCallbackData,
 			})
 		}
@@ -105,7 +112,7 @@ func getPaginateButtons(total int, page int, limit int, data string) []tgbotapi.
 	return buttons
 }
 
-func abs(n int) int {
+func abs[T constraints.Integer | constraints.Float](n T) T {
 	if n < 0 {
 		return -n
 	}
@@ -117,7 +124,7 @@ func getTimeRangeByPeriod(period string) (int64, int64, error) {
 
 	period, ok := reportCommant[period]
 	if !ok {
-		return from, to, errors.New("Incorrect period")
+		return from, to, errors.New("incorrect period")
 	}
 
 	kiev, err := time.LoadLocation("Europe/Kiev")
@@ -132,32 +139,26 @@ func getTimeRangeByPeriod(period string) (int64, int64, error) {
 	case "Today":
 		startOfDay := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
 		from = startOfDay.Unix()
-		break
 	case "This week":
 		_, week := now.ISOWeek()
-		startOfWeek := firstDayOfISOWeek(year, week, now.Location())
+		startOfWeek := isoweek.StartTime(year, week, now.Location())
 		from = startOfWeek.Unix()
-		break
 	case "Last week":
 		_, week := now.ISOWeek()
-		startOfLastWeek := firstDayOfISOWeek(year, week-1, now.Location())
+		startOfLastWeek := isoweek.StartTime(year, week-1, now.Location())
 		from = startOfLastWeek.Unix()
 
-		endOfLastWeek := firstDayOfISOWeek(year, week, now.Location())
+		endOfLastWeek := isoweek.StartTime(year, week, now.Location())
 		to = endOfLastWeek.Unix()
-		break
 	case "This month":
 		startOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, now.Location())
 		from = startOfMonth.Unix()
-
-		break
 	case "Last month":
 		startOfMonth := time.Date(year, month-1, 1, 0, 0, 0, 0, now.Location())
 		from = startOfMonth.Unix()
 
 		endOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, now.Location())
 		to = endOfMonth.Unix()
-		break
 	default:
 		numberOfMonth, err := strconv.Atoi(period)
 		if err != nil {
@@ -174,26 +175,9 @@ func getTimeRangeByPeriod(period string) (int64, int64, error) {
 	return from, to, nil
 }
 
-func firstDayOfISOWeek(year int, week int, timezone *time.Location) time.Time {
-	date := time.Date(year, 0, 0, 0, 0, 0, 0, timezone)
-	isoYear, isoWeek := date.ISOWeek()
-	for date.Weekday() != time.Monday { // iterate back to Monday
-		date = date.AddDate(0, 0, -1)
-		isoYear, isoWeek = date.ISOWeek()
-	}
-	for isoYear < year { // iterate forward to the first day of the first week
-		date = date.AddDate(0, 0, 1)
-		isoYear, isoWeek = date.ISOWeek()
-	}
-	for isoWeek < week { // iterate forward to the first day of the given week
-		date = date.AddDate(0, 0, 1)
-		isoYear, isoWeek = date.ISOWeek()
-	}
-	return date
-}
-
 type pageData struct {
 	Page     int
+	Account  string
 	FromID   int
 	ChatID   int64
 	Period   string
@@ -207,30 +191,29 @@ func callbackQueryDataParser(data string) pageData {
 
 	// not checking errors because it always will be correct numbers
 	period := arr[1]
-	fromID, _ := strconv.Atoi(arr[2])
-	chatID, _ := strconv.ParseInt(arr[3], 10, 64)
 	clientID, _ := strconv.ParseUint(arr[4], 10, 32)
-	page, _ := strconv.Atoi(arr[5])
+	account := arr[5]
+	page, _ := strconv.Atoi(arr[6])
 
 	return pageData{
 		Page:     page,
 		Period:   period,
-		FromID:   fromID,
-		ChatID:   chatID,
 		ClientID: uint32(clientID),
+		Account:  account,
 	}
 }
 
-func callbackQueryDataBulder(prefix string, data pageData) string {
+func callbackQueryDataBuilder(prefix string, data pageData) string {
 	// prefix + Period + FromID + ChatID + clientID + page
 	// example: r:1:12321324:312234234:23423432:1
 
-	return fmt.Sprintf("%s%s:%d:%d:%d:",
+	return fmt.Sprintf("%s:%s:%d:%d:%d:%s:",
 		prefix,
 		data.Period,
-		data.FromID,
-		data.ChatID,
+		0, // data.FromID,
+		0, // data.ChatID,
 		data.ClientID,
+		data.Account,
 		//data.Page,
 	)
 }
@@ -239,4 +222,27 @@ func callbackQueryDataBulder(prefix string, data pageData) string {
 func IsURL(str string) bool {
 	u, err := url.Parse(str)
 	return err == nil && u.Scheme != "" && u.Host != ""
+}
+
+func DoRequest[D any](data D, req *http.Request) (D, error) {
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Error().Err(err).Msg("[DoRequest] request")
+		return data, err
+	}
+
+	defer res.Body.Close()
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Error().Err(err).Msg("[DoRequest] read body")
+		return data, err
+	}
+
+	if err := json.Unmarshal(body, &data); err != nil {
+		log.Error().Err(err).Msg("[DoRequest] unmarshal")
+		return data, err
+	}
+
+	log.Debug().Msgf("[DoRequest] responce %s", string(body))
+	return data, nil
 }

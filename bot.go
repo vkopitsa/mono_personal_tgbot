@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
@@ -27,15 +28,14 @@ type StatementItemData struct {
 
 // Bot is the interface representing bot object.
 type Bot interface {
-	InitMonoClients() error
-	TelegramStart()
+	InitMonoClients(monoTokens string) error
+	TelegramStart(token string)
 	WebhookStart()
 	ProcessingStart()
 }
 
 // bot is implementation the Bot interface
 type bot struct {
-	telegramToken  string
 	telegramAdmins string
 	telegramChats  string
 	clients        []Client
@@ -50,36 +50,26 @@ type bot struct {
 }
 
 // New returns a bot object.
-func New(telegramToken, telegramAdmins, telegramChats, monoTokens string) Bot {
+func New(telegramAdmins, telegramChats string) Bot {
 
 	statementTmpl, err := GetTempate(statementTemplate)
 	if err != nil {
-		log.Fatalf("[template] %s", err)
+		log.Fatal().Err(err).Msg("[template]")
 	}
 
 	balanceTmpl, err := GetTempate(balanceTemplate)
 	if err != nil {
-		log.Fatalf("[template] %s", err)
+		log.Fatal().Err(err).Msg("[template]")
 	}
 
 	webhookTmpl, err := GetTempate(webhookTemplate)
 	if err != nil {
-		log.Fatalf("[template] %s", err)
-	}
-
-	monoTokensArr := strings.Split(monoTokens, ",")
-
-	// init clients
-	clients := make([]Client, 0, len(monoTokensArr))
-	for _, monoToken := range monoTokensArr {
-		clients = append(clients, NewClient(monoToken))
+		log.Fatal().Err(err).Msg("[template]")
 	}
 
 	b := bot{
-		telegramToken:  telegramToken,
 		telegramAdmins: telegramAdmins,
 		telegramChats:  telegramChats,
-		clients:        clients,
 
 		ch: make(chan StatementItemData, 100),
 
@@ -92,34 +82,51 @@ func New(telegramToken, telegramAdmins, telegramChats, monoTokens string) Bot {
 }
 
 // InitMonoClients gets needed client data for correct working of the bot
-func (b *bot) InitMonoClients() error {
-	for _, client := range b.clients {
+func (b *bot) InitMonoClients(monoTokens string) error {
+
+	monoTokensArr := strings.Split(monoTokens, ",")
+
+	// init clients
+	clients := make([]Client, 0, len(monoTokensArr))
+	for _, monoToken := range monoTokensArr {
+
+		client := NewClient(monoToken)
 		if err := client.Init(); err != nil {
 			return err
 		}
+
+		clients = append(clients, client)
 	}
+
+	b.clients = clients
+
 	return nil
 }
 
 // TelegramStart starts getting updates from telegram.
-func (b *bot) TelegramStart() {
-	botAPI, err := tgbotapi.NewBotAPI(b.telegramToken)
+func (b *bot) TelegramStart(token string) {
+	botAPI, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Panic("[telegram] create bot ", err)
+		log.Panic().Err(err).Msg("[telegram] create bot")
 	}
 
 	b.BotAPI = botAPI
 
-	//bot.Debug = true
-
-	log.Printf("Authorized on account %s", b.BotAPI.Self.UserName)
+	log.Info().Msgf("Authorized on account %s", b.BotAPI.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
 	updates, err := b.BotAPI.GetUpdatesChan(u)
+	if err != nil {
+		log.Panic().Err(err).Msg("[telegram] get updates chan")
+	}
 
 	for update := range updates {
+		if update.CallbackQuery == nil && update.Message == nil {
+			log.Warn().Msg("[telegram] received incorrect updates")
+			continue
+		}
 
 		var fromID int
 		var chatID int64
@@ -131,6 +138,8 @@ func (b *bot) TelegramStart() {
 			chatID = update.CallbackQuery.Message.ReplyToMessage.Chat.ID
 		}
 
+		log.Debug().Msgf("[telegram] received a message from %d in chat %d", fromID, chatID)
+
 		if !(b.isAdmin(fromID) || b.isChat(chatID)) {
 			if update.CallbackQuery != nil {
 				_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
@@ -138,96 +147,45 @@ func (b *bot) TelegramStart() {
 					Text:            "Access denied",
 				})
 				if err != nil {
-					log.Printf("[telegram] access denied, callback answer error %s", err)
+					log.Error().Err(err).Msg("[telegram] access denied, callback answer error")
 				}
 			}
 
 			continue
 		}
 
-		if update.Message != nil {
-			log.Printf("[telegram] received a message from %d in chat %d",
-				update.Message.From.ID, update.Message.Chat.ID)
-		}
-
 		if update.Message != nil && strings.HasPrefix(update.Message.Text, "/balance") {
-
-			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/balance"), "_")
-			idx := 0
-			if len(r1) == 1 {
-				idx = 0
+			if len(b.clients) > 1 {
+				_, err = b.BotAPI.Send(b.sendClientButtons("bc", update))
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
 			} else {
-				idx, _ = strconv.Atoi(r1[1])
-			}
-
-			client, err := b.getClient(idx)
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
-				continue
-			}
-
-			clientInfo, err := client.GetInfo()
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
-				continue
-			}
-
-			var account Account
-			for _, _account := range clientInfo.Accounts {
-				if _account.CurrencyCode == 980 {
-					account = _account
+				err := b.sendBalanceByClient(b.clients[0], update.Message)
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] balance, send msg error")
 				}
 			}
 
-			var tpl bytes.Buffer
-			err = b.balanceTmpl.Execute(&tpl, account)
-			if err != nil {
-				log.Printf("[telegram] balance, template execute error %s", err)
-				continue
-			}
-			message := tpl.String()
-
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, message)
-			msg.ReplyToMessageID = update.Message.MessageID
-
-			_, err = b.BotAPI.Send(msg)
-			if err != nil {
-				log.Printf("[telegram] balance, send msg error %s", err)
-			}
 		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/report") {
-			log.Printf("[telegram] report show keyboard")
+			log.Debug().Msg("[telegram] report")
 
-			// reset state
-			b.resetClientState()
-
-			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/report"), "_")
-			idx := 0
-			if len(r1) == 1 {
-				idx = 0
+			if len(b.clients) > 1 {
+				_, err = b.BotAPI.Send(b.sendClientButtons("rc", update))
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
 			} else {
-				idx, _ = strconv.Atoi(r1[1])
-			}
+				tmConfig, err := sendAccountButtonsMessage("ra", b.clients[0], *update.Message)
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
 
-			client, err := b.getClient(idx)
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
-				continue
+				_, err = b.BotAPI.Send(tmConfig)
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
 			}
-
-			_, err = b.BotAPI.Send(client.GetReport().GetKeyboardMessageConfig(update))
-			if err != nil {
-				log.Printf("[telegram] report send msg error %s", err)
-			}
-
-			if err != nil {
-				log.Printf("[telegram] report send msg error %s", err)
-			}
-
-			// set state of the client
-			client.SetState(ClientStateReport)
 		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/get_webhook") {
 
 			r1 := strings.Split(strings.TrimPrefix(update.Message.Text, "/get_webhook"), "_")
@@ -241,21 +199,21 @@ func (b *bot) TelegramStart() {
 			client, err := b.getClient(idx)
 			if err != nil {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
+				b.BotAPI.Send(msg)
 				continue
 			}
 
 			clientInfo, err := client.GetInfo()
 			if err != nil {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
+				b.BotAPI.Send(msg)
 				continue
 			}
 
 			var tpl bytes.Buffer
 			err = b.webhookTmpl.Execute(&tpl, clientInfo)
 			if err != nil {
-				log.Printf("[telegram] get webhook, template execute error %s", err)
+				log.Error().Err(err).Msg("[telegram] get webhook, template execute error")
 				continue
 			}
 			message := tpl.String()
@@ -265,7 +223,7 @@ func (b *bot) TelegramStart() {
 
 			_, err = b.BotAPI.Send(msg)
 			if err != nil {
-				log.Printf("[telegram] balance, send msg error %s", err)
+				log.Error().Err(err).Msg("[telegram] get webhook, send msg error")
 			}
 		} else if update.Message != nil && strings.HasPrefix(update.Message.Text, "/set_webhook") {
 
@@ -287,21 +245,21 @@ func (b *bot) TelegramStart() {
 
 			if !IsURL(r2[1]) {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Incorrect url")
-				_, err = b.BotAPI.Send(msg)
+				b.BotAPI.Send(msg)
 				continue
 			}
 
 			client, err := b.getClient(idx)
 			if err != nil {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
+				b.BotAPI.Send(msg)
 				continue
 			}
 
 			response, err := client.SetWebHook(r2[1])
 			if err != nil {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
+				b.BotAPI.Send(msg)
 				continue
 			}
 
@@ -315,104 +273,150 @@ func (b *bot) TelegramStart() {
 
 			_, err = b.BotAPI.Send(msg)
 			if err != nil {
-				log.Printf("[telegram] balance, send msg error %s", err)
+				log.Error().Err(err).Msg("[telegram] set webhook, send msg error")
 			}
 		} else if update.Message != nil {
-
-			client, err := b.getClientByState(ClientStateReport)
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
-				continue
-			}
-
-			log.Printf("[telegram] report grid")
-
-			if !client.GetReport().IsExistGridData(update) {
-				items, err := client.GetStatement(client.GetReport().GetPeriodFromUpdate(update))
-				if err != nil {
-					log.Printf("[telegram] report get statements error %s", err)
-
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, err.Error())
-					_, err = b.BotAPI.Send(msg)
-					continue
-				}
-
-				// set statement data
-				client.GetReport().SetGridData(update, items)
-			}
-
-			_, err = b.BotAPI.Send(client.GetReport().GetReportGrid(update, client.GetID()))
-			if err != nil {
-				log.Printf("[telegram] report grid send error %s", err)
-			}
-
-			messageConfig := tgbotapi.MessageConfig{}
-			messageConfig.Text = "ᅠ "
-			messageConfig.ChatID = update.Message.Chat.ID
-			messageConfig.ReplyMarkup = tgbotapi.NewRemoveKeyboard(false)
-			emptyMessage, err := b.BotAPI.Send(messageConfig)
-			if err != nil {
-				log.Printf("[telegram] remove keyboard error %s", err)
-			}
-
-			// reset state
-			b.resetClientState()
-
-			_, err = b.BotAPI.Send(tgbotapi.NewDeleteMessage(emptyMessage.Chat.ID, emptyMessage.MessageID))
-			if err != nil {
-				log.Printf("[telegram] remove empty message error %s", err)
-			}
+			log.Warn().Msg("[telegram] the messuge unsupport")
 		} else if update.CallbackQuery != nil {
 
-			client, err := b.getClientByID(callbackQueryDataParser(update.CallbackQuery.Data).ClientID)
+			callbackQueryData := callbackQueryDataParser(update.CallbackQuery.Data)
+
+			client, err := b.getClientByID(callbackQueryData.ClientID)
 			if err != nil {
 				msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, err.Error())
-				_, err = b.BotAPI.Send(msg)
+				b.BotAPI.Send(msg)
 				continue
 			}
 
-			log.Printf("[telegram] report grid page")
-
-			if !client.GetReport().IsExistGridData(update) {
-				items, err := client.GetStatement(client.GetReport().GetPeriodFromUpdate(update))
+			if update.CallbackQuery.Data != "" && update.CallbackQuery.Data[:2] == "bc" {
+				// balance
+				message, err := b.buildBalanceByClient(client)
 				if err != nil {
-					log.Printf("[telegram] report grid page get statements error %s", err)
-
-					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, err.Error())
-					_, err = b.BotAPI.Send(msg)
+					log.Error().Err(err).Msg("[telegram] balance, send msg error")
 					continue
 				}
 
-				// reinit statements data if does not exist
-				client.GetReport().SetGridData(update, items)
-			}
+				messageConfig := tgbotapi.NewEditMessageText(
+					update.CallbackQuery.Message.Chat.ID,
+					update.CallbackQuery.Message.MessageID,
+					message,
+				)
 
-			editMessage, err := client.GetReport().GetUpdatedReportGrid(update)
-			if err != nil {
-				_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
-					CallbackQueryID: update.CallbackQuery.ID,
-					Text:            "Error :(",
-				})
+				_, err = b.BotAPI.Send(messageConfig)
 				if err != nil {
-					log.Printf("[telegram] report grid send callback answer on update error %s", err)
+					log.Error().Err(err).Msg("[telegram] balance, send msg error")
 				}
-			}
+			} else if update.CallbackQuery.Data != "" && update.CallbackQuery.Data[:2] == "rc" {
+				// report account
 
-			_, err = b.BotAPI.Send(editMessage)
-			if err != nil {
-				log.Printf("[telegram] report grid send error %s", err)
+				mConfig, err := sendAccountButtonsEditMessage("ra", client, *update.CallbackQuery.Message)
+
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
+
+				_, err = b.BotAPI.Send(mConfig)
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
+			} else if update.CallbackQuery.Data != "" && update.CallbackQuery.Data[:2] == "ra" {
+				account, err := client.GetAccountByID(callbackQueryData.Account)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, err.Error())
+					b.BotAPI.Send(msg)
+					continue
+				}
+
+				message := client.GetReport(account.ID).GetKeyboarButtonConfig(update, client.GetID())
+				message.Text = fmt.Sprintf(
+					"%s, %s%s\n%s",
+					client.GetName(),
+					NormalizePrice(account.Balance),
+					GetCurrencySymbol(account.CurrencyCode),
+					message.Text,
+				)
+
+				_, err = b.BotAPI.Send(message)
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report send msg error")
+				}
+			} else if update.CallbackQuery.Data != "" && (update.CallbackQuery.Data[:2] == "rp" || update.CallbackQuery.Data[:2] == "rr") {
+				// report
+				log.Debug().Msg("[telegram] report grid page")
+
+				account, err := client.GetAccountByID(callbackQueryData.Account)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, err.Error())
+					b.BotAPI.Send(msg)
+
+					log.Error().Err(err).Msg("[telegram] get account by ID")
+					continue
+				}
+
+				if !client.GetReport(account.ID).IsExistGridData(update) {
+					items, err := client.GetStatement(strings.ReplaceAll(callbackQueryData.Period, "_", " "), account.ID)
+					if err != nil {
+						msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, err.Error())
+						b.BotAPI.Send(msg)
+
+						log.Error().Err(err).Msg("[telegram] report grid page get statements")
+						continue
+					}
+
+					// reinit statements data if does not exist
+					client.GetReport(account.ID).SetGridData(update, items)
+				}
+
+				var editMessage tgbotapi.Chattable
+
+				if update.CallbackQuery.Data[:2] == "rp" {
+					_editMessage := client.GetReport(account.ID).GetReportGrid(update, client.GetID())
+					_editMessage.Text = fmt.Sprintf(
+						"%s, %s%s, %s\n%s",
+						client.GetName(),
+						NormalizePrice(account.Balance),
+						GetCurrencySymbol(account.CurrencyCode),
+						strings.ReplaceAll(callbackQueryData.Period, "_", " "),
+						_editMessage.Text,
+					)
+					editMessage = _editMessage
+
+				} else {
+					_editMessage, err := client.GetReport(account.ID).GetUpdatedReportGrid(update)
+					if err != nil {
+						_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
+							CallbackQueryID: update.CallbackQuery.ID,
+							Text:            "Error :(",
+						})
+						if err != nil {
+							log.Error().Err(err).Msg("[telegram] report grid send callback answer on update error")
+						}
+					}
+					_editMessage.Text = fmt.Sprintf(
+						"%s, %s%s, %s\n%s",
+						client.GetName(),
+						NormalizePrice(account.Balance),
+						GetCurrencySymbol(account.CurrencyCode),
+						strings.ReplaceAll(callbackQueryData.Period, "_", " "),
+						_editMessage.Text,
+					)
+					editMessage = _editMessage
+				}
+
+				_, err = b.BotAPI.Send(editMessage)
+				if err != nil {
+					log.Error().Err(err).Msg("[telegram] report grid send error")
+				}
+			} else {
+				log.Warn().Msg("[telegram] the messege unsupport")
 			}
 
 			_, err = b.BotAPI.AnswerCallbackQuery(tgbotapi.CallbackConfig{
 				CallbackQueryID: update.CallbackQuery.ID,
 			})
 			if err != nil {
-				log.Printf("[telegram] report grid send callback answer error %s", err)
+				log.Error().Err(err).Msg("[telegram] report grid send callback answer error")
 			}
-
-			// reset state
-			b.resetClientState()
 		}
 	}
 }
@@ -423,19 +427,19 @@ func (b *bot) WebhookStart() {
 	http.HandleFunc("/web_hook", func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("[webhook] error %s", err)
-
 			fmt.Fprintf(w, "Not Ok!")
+
+			log.Error().Err(err).Msg("[webhook] read")
 			return
 		}
 
-		//log.Printf("[webhook] body %s", string(body))
+		log.Debug().Msgf("[webhook] body %s", string(body))
 
 		var statementItemData StatementItemData
 		if err := json.Unmarshal(body, &statementItemData); err != nil {
-			log.Printf("[webhook] unmarshal error %s", err)
-
 			fmt.Fprintf(w, "Not Ok!")
+
+			log.Error().Err(err).Msg("[webhook] unmarshal")
 			return
 		}
 
@@ -446,77 +450,106 @@ func (b *bot) WebhookStart() {
 
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
-		log.Panic("[webhook] serve ", err)
+		log.Panic().Err(err).Msg("[webhook] serve")
 	}
 }
 
 // ProcessingStart starts processing data that received from chennal.
 func (b *bot) ProcessingStart() {
-	for {
-		select {
-		case statementItemData := <-b.ch:
 
-			client, err := b.getClientByAccountID(statementItemData.Data.Account)
+	sendTo := func(chatIds, message string) error {
+		ids := strings.Split(strings.Trim(chatIds, " "), ",")
+		for _, id := range ids {
+			chatID, err := strconv.ParseInt(id, 10, 64)
 			if err != nil {
-				log.Printf("[processing] get clietn by account error %s", err)
-				continue
+				return err
 			}
 
-			// trigger on new StatementItem
-			client.AddStatementItem(
-				statementItemData.Data.Account,
-				statementItemData.Data.StatementItem,
-			)
-
-			var tpl bytes.Buffer
-			err = b.statementTmpl.Execute(&tpl, struct {
-				Name          string
-				StatementItem StatementItem
-			}{
-				Name:          client.GetName(),
-				StatementItem: statementItemData.Data.StatementItem,
-			})
+			_, err = b.BotAPI.Send(tgbotapi.NewMessage(chatID, message))
 			if err != nil {
-				log.Printf("[processing] template execute error %s", err)
-				continue
-			}
-			message := tpl.String()
-
-			// to chat
-			ids := strings.Split(strings.Trim(b.telegramChats, " "), ",")
-			for _, id := range ids {
-				chatID, err := strconv.ParseInt(id, 10, 64)
-				if err != nil {
-					log.Printf("[processing] parseInt error %s", err)
-					continue
-				}
-
-				msg := tgbotapi.NewMessage(chatID, message)
-				_, err = b.BotAPI.Send(msg)
-				if err != nil {
-					log.Printf("[processing] send message error %s", err)
-					continue
-				}
-			}
-
-			// to admin member
-			ids = strings.Split(strings.Trim(b.telegramAdmins, " "), ",")
-			for _, id := range ids {
-				chatID, err := strconv.ParseInt(id, 10, 64)
-				if err != nil {
-					log.Printf("[processing] parseInt error %s", err)
-					continue
-				}
-
-				msg := tgbotapi.NewMessage(chatID, message)
-				_, err = b.BotAPI.Send(msg)
-				if err != nil {
-					log.Printf("[processing] send message error %s", err)
-					continue
-				}
+				return err
 			}
 		}
+
+		return nil
 	}
+
+	for {
+		statementItemData := <-b.ch
+
+		client, err := b.getClientByAccountID(statementItemData.Data.Account)
+		if err != nil {
+			log.Error().Err(err).Msg("[processing] get client by account")
+			continue
+		}
+
+		account, err := client.GetAccountByID(statementItemData.Data.Account)
+		if err != nil {
+			log.Error().Err(err).Msg("[processing] get account by id")
+			continue
+		}
+
+		client.ResetReport(statementItemData.Data.Account)
+
+		var tpl bytes.Buffer
+		err = b.statementTmpl.Execute(&tpl, struct {
+			Name          string
+			StatementItem StatementItem
+			Account       Account
+		}{
+			Name:          client.GetName(),
+			StatementItem: statementItemData.Data.StatementItem,
+			Account:       *account,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("[processing] template execute error")
+			continue
+		}
+		message := tpl.String()
+
+		// to chat
+		err = sendTo(b.telegramChats, message)
+		if err != nil {
+			log.Error().Err(err).Msg("[processing] send to chat")
+			continue
+		}
+
+		// to admin
+		err = sendTo(b.telegramAdmins, message)
+		if err != nil {
+			log.Error().Err(err).Msg("[processing] send to admin")
+			continue
+		}
+	}
+}
+
+func (b *bot) sendClientButtons(prefix string, update tgbotapi.Update) tgbotapi.MessageConfig {
+	buttons := []tgbotapi.InlineKeyboardButton{}
+
+	for _, client := range b.clients {
+		callbackData := callbackQueryDataBuilder(prefix, pageData{
+			Page:     0,
+			Period:   "",
+			ChatID:   update.Message.Chat.ID,
+			FromID:   update.Message.From.ID,
+			ClientID: uint32(client.GetID()),
+		})
+
+		buttons = append(buttons, tgbotapi.InlineKeyboardButton{
+			Text:         client.GetName(),
+			CallbackData: &callbackData,
+		})
+	}
+
+	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(buttons)
+
+	messageConfig := tgbotapi.MessageConfig{}
+	messageConfig.Text = "Виберіть клієнта:"
+	messageConfig.ChatID = update.Message.Chat.ID
+	messageConfig.ReplyToMessageID = update.Message.MessageID
+	messageConfig.ReplyMarkup = inlineKeyboardMarkup
+
+	return messageConfig
 }
 
 func (b *bot) getClient(index int) (Client, error) {
@@ -546,22 +579,6 @@ func (b bot) checkIds(stringIds string, id int64) bool {
 	return false
 }
 
-func (b bot) getClientByState(state ClientState) (Client, error) {
-	for _, client := range b.clients {
-		if client.IsState(state) {
-			return client, nil
-		}
-	}
-
-	return nil, errors.New("please repeat a command for client")
-}
-
-func (b *bot) resetClientState() {
-	for _, client := range b.clients {
-		client.SetState(ClientStateNone)
-	}
-}
-
 func (b bot) getClientByID(id uint32) (Client, error) {
 	for _, client := range b.clients {
 		if client.GetID() == id {
@@ -585,6 +602,83 @@ func (b bot) getClientByAccountID(id string) (Client, error) {
 	return nil, errors.New("client does not found")
 }
 
-func (b bot) normalizePrice(price int) string {
-	return fmt.Sprintf("%.2f₴", float64(price/100))
+func (b *bot) buildBalanceByClient(client Client) (string, error) {
+	clientInfo, err := client.GetInfo()
+	if err != nil {
+		return "", err
+	}
+
+	var tpl bytes.Buffer
+	err = b.balanceTmpl.Execute(&tpl, clientInfo)
+	if err != nil {
+		return "", err
+	}
+
+	return tpl.String(), err
+}
+
+func (b *bot) sendBalanceByClient(client Client, tgMessage *tgbotapi.Message) error {
+	message, err := b.buildBalanceByClient(client)
+	if err != nil {
+		msg := tgbotapi.NewMessage(tgMessage.Chat.ID, err.Error())
+		_, err = b.BotAPI.Send(msg)
+		if err != nil {
+			return err
+		}
+	}
+
+	msg := tgbotapi.NewMessage(tgMessage.Chat.ID, message)
+	msg.ReplyToMessageID = tgMessage.MessageID
+
+	_, err = b.BotAPI.Send(msg)
+	return err
+}
+
+func sendAccountButtonsEditMessage(prefix string, client Client, message tgbotapi.Message) (*tgbotapi.EditMessageTextConfig, error) {
+	messageConfig, inlineKeyboardMarkup, _ := buildAccountButtons[tgbotapi.EditMessageTextConfig](prefix, client, message)
+	messageConfig.Text = fmt.Sprintf("%s\nВиберіть рахунок:", client.GetName())
+	messageConfig.ChatID = message.Chat.ID
+	messageConfig.MessageID = message.MessageID
+	messageConfig.ReplyMarkup = inlineKeyboardMarkup
+
+	return messageConfig, nil
+}
+
+func sendAccountButtonsMessage(prefix string, client Client, message tgbotapi.Message) (*tgbotapi.MessageConfig, error) {
+
+	messageConfig, inlineKeyboardMarkup, _ := buildAccountButtons[tgbotapi.MessageConfig](prefix, client, message)
+	messageConfig.Text = fmt.Sprintf("%s\nВиберіть рахунок:", client.GetName())
+	messageConfig.ChatID = message.Chat.ID
+	messageConfig.ReplyToMessageID = message.MessageID
+	messageConfig.ReplyMarkup = inlineKeyboardMarkup
+
+	return messageConfig, nil
+}
+
+func buildAccountButtons[V tgbotapi.EditMessageTextConfig | tgbotapi.MessageConfig](prefix string, client Client, message tgbotapi.Message) (*V, *tgbotapi.InlineKeyboardMarkup, error) {
+	buttons := []tgbotapi.InlineKeyboardButton{}
+
+	info, err := client.GetInfo()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, account := range info.Accounts {
+		callbackData := callbackQueryDataBuilder(prefix, pageData{
+			Page:     0,
+			Period:   "",
+			ChatID:   message.Chat.ID,
+			FromID:   message.From.ID,
+			ClientID: uint32(client.GetID()),
+			Account:  account.ID,
+		})
+
+		buttons = append(buttons, tgbotapi.InlineKeyboardButton{
+			Text:         fmt.Sprintf("%s%s", NormalizePrice(account.Balance), GetCurrencySymbol(account.CurrencyCode)),
+			CallbackData: &callbackData,
+		})
+	}
+
+	inlineKeyboardMarkup := tgbotapi.NewInlineKeyboardMarkup(buttons)
+	return new(V), &inlineKeyboardMarkup, nil
 }
