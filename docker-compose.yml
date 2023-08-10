@@ -10,9 +10,14 @@ services:
       dockerfile: Dockerfile
     environment:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-      - MONO_TOKEN=${MONO_TOKEN}
+      - MONO_TOKENS=${MONO_TOKENS}
       - TELEGRAM_ADMINS=${TELEGRAM_ADMINS}
       - TELEGRAM_CHATS=${TELEGRAM_CHATS}
       - LOG_LEVEL=${LOG_LEVEL}
+      - SCHEDULE_TIME=${SCHEDULE_TIME}
     ports:
       - ${APP_PORT}:8080
+    logging:
+      options:
+        max-file: 5
+        max-size: 15m

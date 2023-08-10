@@ -21,14 +21,21 @@ var balanceTemplate = `{{ .Name }}
 {{end}}`
 
 // Report template, Use the ReportPage structure
-var reportPageTemplate = `Витрачено: {{ normalizePrice .SpentTotal }}{{ getCurrencySymbol .CurrencyCode }}, Кешбек: {{ normalizePrice .CashbackAmountTotal }}{{ getCurrencySymbol .CurrencyCode }}
+var reportPageTemplate = `{{ $symbol := getCurrencySymbol .CurrencyCode }}Витрачено: {{ normalizePrice .SpentTotal }}{{ $symbol }}, Кешбек: {{ normalizePrice .CashbackAmountTotal }}{{ $symbol }}
 
-{{range $item := .StatementItems }}{{ getIcon $item }} {{ normalizePrice $item.Amount }}{{ getCurrencySymbol .CurrencyCode }} {{ if ne $item.Amount $item.OperationAmount }} ({{ normalizePrice $item.OperationAmount }}{{ getCurrencySymbol $item.CurrencyCode }}){{end}}{{if $item.CashbackAmount }}, Кешбек: {{ normalizePrice $item.CashbackAmount }}{{ getCurrencySymbol $item.CurrencyCode }}{{end}}
+{{range $item := .StatementItems }}{{ getIcon $item }} {{ normalizePrice $item.Amount }}{{ $symbol }} {{ if ne $item.Amount $item.OperationAmount }} ({{ normalizePrice $item.OperationAmount }}{{ getCurrencySymbol $item.CurrencyCode }}){{end}}{{if $item.CashbackAmount }}, Кешбек: {{ normalizePrice $item.CashbackAmount }}{{ getCurrencySymbol $item.CurrencyCode }}{{end}}
 {{ unescapeString $item.Description }}{{if $item.Comment }}
 Коментар: {{ unescapeString $item.Comment }}{{end}}
-Баланс: {{ normalizePrice $item.Balance }}{{ getCurrencySymbol $item.CurrencyCode }}
+Баланс: {{ normalizePrice $item.Balance }}{{ $symbol }}
 
 {{end}}`
+
+// Schedule Report template, Use the ScheduleReportData structure
+var scheduleReportTemplate = `Щоденна статистика рахунків, {{ .ClientInfo.Name }}
+
+Витрачено: {{ normalizePrice .Sum }} UAH
+Кешбек: {{ normalizePrice .CashbackSum }} UAH
+Транзакцій: {{ .Count }}`
 
 // WebHook template, use the ClientInfo structure
 var webhookTemplate = `Вебхук: {{if .WebHookURL }}{{ .WebHookURL }}{{else}} Відсутній {{end}}`

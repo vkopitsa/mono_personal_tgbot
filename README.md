@@ -10,6 +10,8 @@ A simple telegram bot, written in Go with the [telegram-bot-api](https://github.
 
 ![mono_personal_tgbot](Resources/screenshot.png)
 
+![mono_personal_tgbot](Resources/screenshot1.png)
+
 ## Usage
 
 Run `mono_personal_tgbot` execution file in your terminal with following env variables
@@ -19,6 +21,7 @@ Run `mono_personal_tgbot` execution file in your terminal with following env var
 `TELEGRAM_TOKEN`         | [How to get telegram bot token](https://core.telegram.org/bots#3-how-do-i-create-a-bot)
 `TELEGRAM_ADMINS`        | ids of the trusted user, example: `1234567,1234567`
 `TELEGRAM_CHATS`         | ids of the trusted chats, example: `-1234567,-1234567`
+`SCHEDULE_TIME`          | set time for daily report, example: `0 21 * * *`
 `MONO_TOKENS`            | [How to get monobank token](https://api.monobank.ua/)
 
 ### Telegram commands
