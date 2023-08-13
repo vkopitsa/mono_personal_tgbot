@@ -32,8 +32,22 @@ func main() {
 		log.Panic().Err(err)
 	}
 
+	// init Schedule Report
+	isScheduleReportEnabled := os.Getenv("SCHEDULE_TIME") != ""
+	var scheduleReport *ScheduleReport
+	if isScheduleReportEnabled {
+		scheduleReport, err = NewScheduleReport(os.Getenv("SCHEDULE_TIME"))
+		if err != nil {
+			log.Panic().Err(err)
+		}
+	}
+
 	go bot.TelegramStart(os.Getenv("TELEGRAM_TOKEN"))
 	go bot.ProcessingStart()
+
+	if isScheduleReportEnabled {
+		go scheduleReport.Start(bot.ScheduleReport)
+	}
 
 	// run http server
 	bot.WebhookStart()

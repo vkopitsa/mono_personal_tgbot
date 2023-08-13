@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/stretchr/testify/assert"
+)
 
 func TestGetPaginateButtonsPage1(t *testing.T) {
 	total := 57
@@ -273,4 +279,29 @@ func TestGetPaginateButtonsCouplePage2(t *testing.T) {
 			)
 		}
 	}
+}
+
+func TestGetTimeRangeByPeriod(t *testing.T) {
+	patches := gomonkey.ApplyFunc(time.Now, func() time.Time {
+		return time.Unix(1672531300, 0)
+	})
+	defer patches.Reset()
+
+	from, to, err := getTimeRangeByPeriod("Today")
+	assert.NoError(t, err)
+
+	assert.Equal(t, from, int64(1672531200))
+	assert.Equal(t, to, int64(0))
+
+	from, to, err = getTimeRangeByPeriod("This week")
+	assert.NoError(t, err)
+
+	assert.Equal(t, from, int64(1703462400))
+	assert.Equal(t, to, int64(0))
+
+	from, to, err = getTimeRangeByPeriod("December")
+	assert.NoError(t, err)
+
+	assert.Equal(t, from, int64(1701388800))
+	assert.Equal(t, to, int64(1704067200))
 }

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -127,12 +131,7 @@ func getTimeRangeByPeriod(period string) (int64, int64, error) {
 		return from, to, errors.New("incorrect period")
 	}
 
-	kiev, err := time.LoadLocation("Europe/Kiev")
-	if err != nil {
-		return from, to, err
-	}
-
-	now := time.Now().In(kiev)
+	now := time.Now().UTC()
 	year, month, day := now.Date()
 
 	switch period {
@@ -245,4 +244,41 @@ func DoRequest[D any](data D, req *http.Request) (D, error) {
 
 	log.Debug().Msgf("[DoRequest] responce %s", string(body))
 	return data, nil
+}
+
+func dumpToFile[T any](filePath string, data T) error {
+	f, err := os.Create(filepath.Clean(filePath))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+
+	err = enc.Encode(data)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(buf.Bytes())
+	return err
+}
+
+func dumpFromFile[T any](filePath string) (*T, error) {
+	f, err := os.Open(filepath.Clean(filePath))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(f)
+	if err != nil {
+		return nil, err
+	}
+	dec := gob.NewDecoder(&buf)
+
+	data := new(T)
+	err = dec.Decode(data)
+	return data, err
 }

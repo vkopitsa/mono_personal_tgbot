@@ -52,11 +52,11 @@ type Report interface {
 type report struct {
 	cache map[string][]StatementItem
 
-	prefix    string
-	perPage   int
-	tmpl      *template.Template
-	accountId string
-	clientId  uint32
+	prefix   string
+	perPage  int
+	tmpl     *template.Template
+	account  *Account
+	clientId uint32
 }
 
 // ReportPage is a structure to render  report content the telegram
@@ -70,7 +70,7 @@ type ReportPage struct {
 }
 
 // NewReport returns a report object.
-func NewReport(accountId string, clientId uint32) Report {
+func NewReport(account *Account, clientId uint32) Report {
 
 	tmpl, err := GetTempate(reportPageTemplate)
 	if err != nil {
@@ -78,12 +78,12 @@ func NewReport(accountId string, clientId uint32) Report {
 	}
 
 	return &report{
-		prefix:    "rr",
-		perPage:   5,
-		cache:     map[string][]StatementItem{},
-		tmpl:      tmpl,
-		accountId: accountId,
-		clientId:  clientId,
+		prefix:   "rr",
+		perPage:  5,
+		cache:    map[string][]StatementItem{},
+		tmpl:     tmpl,
+		account:  account,
+		clientId: clientId,
 	}
 }
 
@@ -196,14 +196,13 @@ func (r report) buildReportPage(items []StatementItem, page, limit int) ReportPa
 	var amountTotal int
 	var cashbackAmountTotal int
 	var spentTotal int
-	var currencyCode int
+
 	for _, item := range items {
 		if item.Amount < 0 {
 			spentTotal += -item.Amount
 		}
 		amountTotal += abs(item.Amount)
 		cashbackAmountTotal += item.CashbackAmount
-		currencyCode = item.CurrencyCode
 	}
 
 	if total > 0 {
@@ -219,7 +218,7 @@ func (r report) buildReportPage(items []StatementItem, page, limit int) ReportPa
 	return ReportPage{
 		StatementItems:      items,
 		AmountTotal:         amountTotal,
-		CurrencyCode:        currencyCode,
+		CurrencyCode:        r.account.CurrencyCode,
 		SpentTotal:          spentTotal,
 		CashbackAmountTotal: cashbackAmountTotal,
 	}
@@ -248,7 +247,7 @@ func (r report) GetKeyboarButtonConfig(update tgbotapi.Update, clientID uint32) 
 			ChatID:   tgMessage.Chat.ID,
 			FromID:   tgMessage.From.ID,
 			ClientID: r.clientId,
-			Account:  r.accountId,
+			Account:  r.account.ID,
 		})
 
 		// add page number
@@ -378,5 +377,5 @@ func (r *report) ResetLastData() {
 }
 
 func (r *report) IsAccount(accountId string) bool {
-	return r.accountId == accountId
+	return r.account.ID == accountId
 }

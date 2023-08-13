@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -32,6 +34,7 @@ type Bot interface {
 	TelegramStart(token string)
 	WebhookStart()
 	ProcessingStart()
+	ScheduleReport(ctx context.Context) (int, error)
 }
 
 // bot is implementation the Bot interface
@@ -47,6 +50,8 @@ type bot struct {
 	statementTmpl *template.Template
 	balanceTmpl   *template.Template
 	webhookTmpl   *template.Template
+
+	mono *Mono
 }
 
 // New returns a bot object.
@@ -76,6 +81,7 @@ func New(telegramAdmins, telegramChats string) Bot {
 		statementTmpl: statementTmpl,
 		balanceTmpl:   balanceTmpl,
 		webhookTmpl:   webhookTmpl,
+		mono:          NewMono(),
 	}
 
 	return &b
@@ -90,7 +96,7 @@ func (b *bot) InitMonoClients(monoTokens string) error {
 	clients := make([]Client, 0, len(monoTokensArr))
 	for _, monoToken := range monoTokensArr {
 
-		client := NewClient(monoToken)
+		client := NewClient(monoToken, b.mono)
 		if err := client.Init(); err != nil {
 			return err
 		}
@@ -448,7 +454,12 @@ func (b *bot) WebhookStart() {
 		fmt.Fprintf(w, "Ok!")
 	})
 
-	err := http.ListenAndServe(":8080", nil)
+	server := &http.Server{
+		Addr:              ":8080",
+		ReadHeaderTimeout: 5 * time.Minute,
+	}
+
+	err := server.ListenAndServe()
 	if err != nil {
 		log.Panic().Err(err).Msg("[webhook] serve")
 	}
@@ -456,23 +467,6 @@ func (b *bot) WebhookStart() {
 
 // ProcessingStart starts processing data that received from chennal.
 func (b *bot) ProcessingStart() {
-
-	sendTo := func(chatIds, message string) error {
-		ids := strings.Split(strings.Trim(chatIds, " "), ",")
-		for _, id := range ids {
-			chatID, err := strconv.ParseInt(id, 10, 64)
-			if err != nil {
-				return err
-			}
-
-			_, err = b.BotAPI.Send(tgbotapi.NewMessage(chatID, message))
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
 
 	for {
 		statementItemData := <-b.ch
@@ -508,14 +502,14 @@ func (b *bot) ProcessingStart() {
 		message := tpl.String()
 
 		// to chat
-		err = sendTo(b.telegramChats, message)
+		err = b.sendTo(b.telegramChats, message)
 		if err != nil {
 			log.Error().Err(err).Msg("[processing] send to chat")
 			continue
 		}
 
 		// to admin
-		err = sendTo(b.telegramAdmins, message)
+		err = b.sendTo(b.telegramAdmins, message)
 		if err != nil {
 			log.Error().Err(err).Msg("[processing] send to admin")
 			continue
@@ -603,7 +597,7 @@ func (b bot) getClientByAccountID(id string) (Client, error) {
 }
 
 func (b *bot) buildBalanceByClient(client Client) (string, error) {
-	clientInfo, err := client.GetInfo()
+	clientInfo, err := client.Clear().GetInfo()
 	if err != nil {
 		return "", err
 	}
@@ -632,6 +626,23 @@ func (b *bot) sendBalanceByClient(client Client, tgMessage *tgbotapi.Message) er
 
 	_, err = b.BotAPI.Send(msg)
 	return err
+}
+
+func (b *bot) sendTo(chatIds, message string) error {
+	ids := strings.Split(strings.Trim(chatIds, " "), ",")
+	for _, id := range ids {
+		chatID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		_, err = b.BotAPI.Send(tgbotapi.NewMessage(chatID, message))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func sendAccountButtonsEditMessage(prefix string, client Client, message tgbotapi.Message) (*tgbotapi.EditMessageTextConfig, error) {
@@ -674,7 +685,7 @@ func buildAccountButtons[V tgbotapi.EditMessageTextConfig | tgbotapi.MessageConf
 		})
 
 		buttons = append(buttons, tgbotapi.InlineKeyboardButton{
-			Text:         fmt.Sprintf("%s%s", NormalizePrice(account.Balance), GetCurrencySymbol(account.CurrencyCode)),
+			Text:         account.GetName(),
 			CallbackData: &callbackData,
 		})
 	}
